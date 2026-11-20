@@ -11,7 +11,7 @@ namespace crossdesk {
 namespace {
 
 std::wstring ServiceExecutable() {
-  return platform::SiblingExecutablePath(L"crossdesk_service.exe").wstring();
+  return platform::SiblingExecutablePath(L"redesk_service.exe").wstring();
 }
 
 bool SharedHostArmed() {
@@ -42,12 +42,12 @@ bool ServiceAutostartMatches(bool enabled) {
       return false;
     // The flag can already be off after a partially failed disable. Only skip
     // the retry after checking the same registrations that cleanup removes.
-    return platform::IsInstalledAutostartAbsent("CrossDesk");
+    return platform::IsInstalledAutostartAbsent("ReDesk");
   }
   return SharedHostArmed() &&
          QueryCrossDeskServiceRegistration(ServiceExecutable(), nullptr, &start_type) ==
              ServiceRegistrationState::current &&
-         start_type == SERVICE_AUTO_START && platform::IsAutostartEnabled("CrossDesk");
+         start_type == SERVICE_AUTO_START && platform::IsAutostartEnabled("ReDesk");
 }
 
 }  // namespace crossdesk

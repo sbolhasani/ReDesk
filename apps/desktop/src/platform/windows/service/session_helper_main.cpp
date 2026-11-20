@@ -142,7 +142,7 @@ struct IpcSecurityAttributes {
 void InitializeHelperLogger() {
   static std::once_flag once_flag;
   std::call_once(once_flag, []() {
-    crossdesk::PathManager path_manager("CrossDesk");
+    crossdesk::PathManager path_manager("ReDesk");
     const auto initialize = [&](const std::filesystem::path& log_path) {
       if (log_path.empty() || !path_manager.CreateDirectories(log_path)) return false;
       try {
@@ -158,7 +158,7 @@ void InitializeHelperLogger() {
     if (initialize(path_manager.GetLogPath() / "session_helper")) return;
     // The ordinary session helper uses the user's token. A portable helper
     // installed in Program Files cannot append to a SYSTEM-owned capture log.
-    if (initialize(crossdesk::platform::GetLogPath("CrossDesk") /
+    if (initialize(crossdesk::platform::GetLogPath("ReDesk") /
                    "session_helper")) return;
     InitLogger("logs/session_helper");
   });
@@ -514,7 +514,7 @@ bool IsTrustedVirtualDisplayClient(HANDLE pipe) {
   if (own_length == 0 || own_length >= MAX_PATH) return false;
   std::error_code ignored;
   const std::filesystem::path client(image);
-  if (_wcsicmp(client.filename().c_str(), L"CrossDesk.exe") != 0) return false;
+  if (_wcsicmp(client.filename().c_str(), L"ReDesk.exe") != 0) return false;
   const std::filesystem::path client_directory =
       std::filesystem::weakly_canonical(client.parent_path(), ignored);
   const std::filesystem::path own_directory = std::filesystem::weakly_canonical(
@@ -2202,7 +2202,7 @@ void SecureInputHelperIpcServerLoop(HANDLE stop_event, DWORD session_id) {
 }
 
 void PrintUsage() {
-  std::cout << "CrossDesk session helper\n"
+  std::cout << "ReDesk session helper\n"
             << "  --session-helper             Run helper loop\n"
             << "  --secure-input-helper        Run Winlogon input helper\n"
             << "  --session-id <id>            Expected target session id\n"

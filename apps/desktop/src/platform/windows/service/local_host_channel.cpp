@@ -141,7 +141,7 @@ void LocalHostChannel::SetConnected(bool connected) {
 }
 
 void LocalHostChannel::Run() {
-  const auto name = L"\\\\.\\pipe\\CrossDesk.Host." + std::to_wstring(session_);
+  const auto name = L"\\\\.\\pipe\\ReDesk.Host." + std::to_wstring(session_);
   std::string last_auth_error;
   while (WaitForSingleObject(stop_, 0) == WAIT_TIMEOUT) {
     Handle pipe;

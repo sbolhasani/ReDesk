@@ -28,8 +28,8 @@ bool CleanupLegacyServiceAutostart() {
   // the flag predates service startup. Remove it rather than silently turning
   // it into pre-login access. With the flag set, only fold a Run entry back
   // into the elevated handoff task.
-  return IsUnattendedEnabled() ? platform::MigrateLegacyAutostart("CrossDesk")
-                               : platform::RemoveInstalledAutostart("CrossDesk");
+  return IsUnattendedEnabled() ? platform::MigrateLegacyAutostart("ReDesk")
+                               : platform::RemoveInstalledAutostart("ReDesk");
 }
 
 bool SetServiceAutostart(bool enabled, std::string& error) {
@@ -54,16 +54,16 @@ bool SetServiceAutostart(bool enabled, std::string& error) {
     // Disarm the host without stopping the lock-screen service used by GUI
     // sessions. A missing service/binary must not prevent disabling startup.
     if (SetUnattendedEnabled(false) && SetCrossDeskServiceAutoStart(false) &&
-        platform::RemoveInstalledAutostart("CrossDesk")) return true;
+        platform::RemoveInstalledAutostart("ReDesk")) return true;
     error = "Could not disable unattended startup";
     return false;
   }
 
   const auto executable = platform::GetAutostartExecutablePath();
-  const auto service = platform::SiblingExecutablePath(L"crossdesk_service.exe");
+  const auto service = platform::SiblingExecutablePath(L"redesk_service.exe");
   std::error_code file_error;
   if (executable.empty() || !std::filesystem::is_regular_file(service, file_error) ||
-      !std::filesystem::is_regular_file(service.parent_path() / L"crossdesk_session_helper.exe", file_error)) {
+      !std::filesystem::is_regular_file(service.parent_path() / L"redesk_session_helper.exe", file_error)) {
     error = "The Windows service or session helper is missing. Repair the installation";
     return false;
   }
@@ -88,7 +88,7 @@ bool SetServiceAutostart(bool enabled, std::string& error) {
     error = "Could not stop the old service to configure shared identity";
     return false;
   }
-  PathManager paths("CrossDesk");
+  PathManager paths("ReDesk");
   ResolveVirtualDisplayMode();  // Persist the console mode while enabling boot startup.
   ConfigCenter source((paths.GetCachePath() / "config.ini").string());
   if (!SharedHostIdentity::Prepare(paths.GetCachePath(), paths.GetConfigPath() / "trusted-devices",
@@ -96,7 +96,7 @@ bool SetServiceAutostart(bool enabled, std::string& error) {
   const bool was_enabled = IsUnattendedEnabled();
   if (SetUnattendedEnabled(true) &&
       ((current && start_type == SERVICE_AUTO_START) || InstallCrossDeskService(service.wstring())) &&
-      StartCrossDeskService() && platform::EnableAutostart("CrossDesk", executable)) return true;
+      StartCrossDeskService() && platform::EnableAutostart("ReDesk", executable)) return true;
 
   const bool restored_flag = SetUnattendedEnabled(was_enabled);
   const bool restored_start = SetCrossDeskServiceAutoStart(start_type == SERVICE_AUTO_START);

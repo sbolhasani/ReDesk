@@ -40,9 +40,9 @@ bool InstallServiceWithElevation() {
   }
 
   const std::filesystem::path service_path =
-      executable_path.parent_path() / L"crossdesk_service.exe";
+      executable_path.parent_path() / L"redesk_service.exe";
   const std::filesystem::path helper_path =
-      executable_path.parent_path() / L"crossdesk_session_helper.exe";
+      executable_path.parent_path() / L"redesk_session_helper.exe";
   std::error_code error;
   if (!std::filesystem::is_regular_file(service_path, error) ||
       !std::filesystem::is_regular_file(helper_path, error)) {
@@ -101,7 +101,7 @@ void GuiApplication::CheckPortableWindowsService() {
   const auto registration = QueryCrossDeskServiceRegistration(
       executable_path.empty() ? std::wstring{}
                               : (executable_path.parent_path() /
-                                 L"crossdesk_service.exe").wstring(),
+                                 L"redesk_service.exe").wstring(),
       &error);
   portable_service_installed_ = registration == ServiceRegistrationState::current;
   portable_service_needs_repair_ =

@@ -38,7 +38,7 @@ using Json = nlohmann::json;
 
 constexpr char kSecureDesktopKeyboardIpcCommandPrefix[] = "secure-input-key:";
 constexpr char kSecureDesktopMouseIpcCommandPrefix[] = "secure-input-mouse:";
-constexpr wchar_t kCrossDeskClientProcessName[] = L"crossdesk.exe";
+constexpr wchar_t kCrossDeskClientProcessName[] = L"redesk.exe";
 constexpr DWORD kCrossDeskClientMonitorIntervalMs = 1000;
 constexpr ULONGLONG kCrossDeskClientMonitorStartupGraceMs = 5000;
 constexpr ULONGLONG kSasSecureDesktopGraceMs = 15000;
@@ -103,7 +103,7 @@ std::wstring QuoteWindowsArgument(const std::wstring& value) {
 void InitializeServiceLogger() {
   static std::once_flag once_flag;
   std::call_once(once_flag, []() {
-    PathManager path_manager("CrossDesk");
+    PathManager path_manager("ReDesk");
     std::filesystem::path log_path = path_manager.GetLogPath() / "service";
     if (!log_path.empty() && path_manager.CreateDirectories(log_path)) {
       InitLogger(log_path.string());
@@ -1007,7 +1007,7 @@ int CrossDeskServiceHost::InitializeRuntime() {
       !StringFromGUID2(lifetime_id, lifetime_guid, 40))
     return ERROR_GEN_FAILURE;
   lifetime_mutex_name_ =
-      L"Global\\CrossDeskServiceLifetime-" + std::wstring(lifetime_guid);
+      L"Global\\ReDeskServiceLifetime-" + std::wstring(lifetime_guid);
   PSECURITY_DESCRIPTOR lifetime_descriptor = nullptr;
   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
           L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100000;;;AU)", SDDL_REVISION_1,
@@ -1108,7 +1108,7 @@ int CrossDeskServiceHost::InitializeRuntime() {
     client_process_monitor_thread_ =
         std::thread(&CrossDeskServiceHost::ClientProcessMonitorLoop, this);
   }
-  LOG_INFO("CrossDesk service runtime initialized, session_id={}",
+  LOG_INFO("ReDesk service runtime initialized, session_id={}",
            active_session_id_);
   return 0;
 }
@@ -1203,7 +1203,7 @@ void CrossDeskServiceHost::ClientProcessMonitorLoop() {
       continue;
     }
 
-    LOG_INFO("No crossdesk client process detected, stopping service");
+    LOG_INFO("No redesk client process detected, stopping service");
     RequestStop();
     return;
   }
@@ -1216,13 +1216,13 @@ bool CrossDeskServiceHost::LaunchUnattendedHost(DWORD session_id) {
   }
   const auto executable =
       std::filesystem::path(GetCurrentExecutablePathW()).parent_path() /
-      L"CrossDesk.exe";
+      L"ReDesk.exe";
   GUID nonce{};
   wchar_t guid[40]{};
   if (FAILED(CoCreateGuid(&nonce)) || !StringFromGUID2(nonce, guid, 40))
     return false;
   const std::wstring event_name =
-      L"Global\\CrossDeskUnattendedStop-" + std::wstring(guid);
+      L"Global\\ReDeskUnattendedStop-" + std::wstring(guid);
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
           L"D:P(A;;GA;;;SY)", SDDL_REVISION_1, &descriptor, nullptr))
@@ -1339,7 +1339,7 @@ int CrossDeskServiceHost::RunServiceLoop(bool as_service) {
 
   if (console_mode_) {
     SetConsoleCtrlHandler(&CrossDeskServiceHost::ConsoleControlHandler, TRUE);
-    std::cout << "CrossDesk service running in console mode. Press "
+    std::cout << "ReDesk service running in console mode. Press "
                  "Ctrl+C to stop."
               << std::endl;
   }
@@ -1676,13 +1676,13 @@ std::wstring CrossDeskServiceHost::GetSessionHelperPath() const {
   }
 
   return (std::filesystem::path(current_executable).parent_path() /
-          L"crossdesk_session_helper.exe")
+          L"redesk_session_helper.exe")
       .wstring();
 }
 
 std::wstring CrossDeskServiceHost::GetSessionHelperStopEventName(
     DWORD session_id) const {
-  return L"Global\\CrossDeskSessionHelperStop-" + std::to_wstring(session_id);
+  return L"Global\\ReDeskSessionHelperStop-" + std::to_wstring(session_id);
 }
 
 std::wstring CrossDeskServiceHost::GetSecureInputHelperPath() const {
@@ -1691,7 +1691,7 @@ std::wstring CrossDeskServiceHost::GetSecureInputHelperPath() const {
 
 std::wstring CrossDeskServiceHost::GetSecureInputHelperStopEventName(
     DWORD session_id) const {
-  return L"Global\\CrossDeskSecureInputHelperStop-" +
+  return L"Global\\ReDeskSecureInputHelperStop-" +
          std::to_wstring(session_id);
 }
 
@@ -2412,7 +2412,7 @@ std::string CrossDeskServiceHost::BuildStatusResponse(DWORD client_session_id) {
   std::string raw_interactive_stage = ResolveInteractiveStageLocked();
   std::string interactive_stage = EscapeJsonString(raw_interactive_stage);
   std::ostringstream stream;
-  stream << "{\"ok\":true,\"service\":\"CrossDeskService\""
+  stream << "{\"ok\":true,\"service\":\"ReDeskService\""
          << ",\"active_session_id\":" << active_session_id_
          << ",\"process_session_id\":" << process_session_id_
          << ",\"session_locked\":" << (session_locked_ ? "true" : "false")
@@ -2708,7 +2708,7 @@ ServiceRegistrationState QueryCrossDeskServiceRegistration(
   std::error_code error;
   if (!std::filesystem::is_regular_file(expected, error) ||
       !std::filesystem::is_regular_file(
-          expected.parent_path() / L"crossdesk_session_helper.exe", error)) {
+          expected.parent_path() / L"redesk_session_helper.exe", error)) {
     return ServiceRegistrationState::repair_required;
   }
   return ServiceRegistrationState::current;
@@ -2833,7 +2833,7 @@ bool RepairCrossDeskService(const std::wstring& binary_path) {
   std::error_code error;
   if (!std::filesystem::is_regular_file(service_path, error) ||
       !std::filesystem::is_regular_file(
-          service_path.parent_path() / L"crossdesk_session_helper.exe", error)) {
+          service_path.parent_path() / L"redesk_session_helper.exe", error)) {
     LOG_ERROR("Service repair failed: service binaries missing");
     return false;
   }
