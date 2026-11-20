@@ -316,12 +316,12 @@ static int RunApplication(int argc, char* argv[]) {
   // The headless supervisor owns the display and application lifetime. A
   // detached daemon would outlive its display; systemd can restart the whole
   // session instead.
-  if (std::getenv("REDESK_HEADLESS_ACTIVE") ||
+  if (std::getenv("CROSSDESK_HEADLESS_ACTIVE") ||
       crossdesk::HeadlessConsole::Instance().active()) enable_daemon = false;
 
   auto& runtime_daemon = crossdesk::platform::LinuxRuntimeDaemon::Instance();
   runtime_daemon.Initialize(
-      argc, argv, !std::getenv("REDESK_HEADLESS_ACTIVE") &&
+      argc, argv, !std::getenv("CROSSDESK_HEADLESS_ACTIVE") &&
                       !crossdesk::HeadlessConsole::Instance().active());
 #elif defined(_WIN32)
   auto& runtime_daemon = crossdesk::platform::WindowsRuntimeDaemon::Instance();
