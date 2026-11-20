@@ -111,3 +111,37 @@ probe and the subsequent ICE connection separately.
 For temporary aggregate presence diagnostics (no device IDs logged), set
 `DEBUG_PRESENCE = "1"` in the Worker's `[vars]` configuration and
 redeploy, then view `wrangler tail`. Disable after diagnosis.
+
+## P2P Connecting after Presence succeeds (2026-11-21)
+
+The initial Worker accepted only numeric 9-digit users. ReDesk/MiniRTC
+creates a **separate outbound signaling peer** for each viewer connection
+with ID `C-<local device ID>`; that account cannot sign in using the
+old numeric-only rule, leaving the UI at P2P Connecting.
+
+Fixes:
+- Accept `C-<registered numeric ID>` as an ephemeral signaling identity
+  **only when its Ed25519 login challenge proves possession of the same
+  registered device key**. It does not receive its own permanent account or
+  password. Its presence is not reported as a host device.
+- Relay SDP and ICE messages between numeric hosts and authenticated
+  `C-` viewers, while validating that both belong to the same authorized
+  session. Never trust the spoofable sender fields in forwarded JSON.
+- Deliver `user_join_transmission` only to the host so **only the host
+  initiates the offer**. Both parties still receive their session ticket.
+- Add `test/connection.test.js` for session-ID challenge and bidirectional
+  signaling. The tests remain a protocol smoke suite, not a replacement
+  for a two-machine runtime test.
+
+Deployment after updating this branch:
+
+```powershell
+cd cloudflare\signal
+npm run check
+npm run deploy
+```
+
+**No ReDesk C++ rebuild is required.** Relaunch both clients after deployment,
+then connect using the numeric device ID and its displayed password. If
+signaling now succeeds but ICE still cannot connect between restrictive
+NATs, the next milestone is TURN; a Worker alone is not a media relay.
