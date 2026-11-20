@@ -1170,7 +1170,7 @@ int GuiApplication::Run() {
   std::string activation_error;
   activation_receiver->Start(activation_error);
 #endif
-  path_manager_ = std::make_unique<PathManager>("CrossDesk");
+  path_manager_ = std::make_unique<PathManager>("ReDesk");
   if (!path_manager_) {
     return -1;
   }
@@ -1546,19 +1546,19 @@ void GuiApplication::InitializeSystemTray() {
   ui_->tray = std::make_unique<WinTray>(
       std::move(show_window), std::move(hide_window),
       std::move(open_settings), std::move(exit_app), LoadSlintTrayIcon(),
-      L"CrossDesk", localization_language_index_);
+      L"ReDesk", localization_language_index_);
 #elif defined(__APPLE__)
   ui_->tray = std::make_unique<MacTray>(
       std::move(show_window), std::move(hide_window), std::move(open_settings),
-      std::move(exit_app), "CrossDesk", localization_language_index_);
+      std::move(exit_app), "ReDesk", localization_language_index_);
 #elif defined(__OHOS__)
   ui_->tray = std::make_unique<HarmonyTray>(
       std::move(show_window), std::move(hide_window), std::move(open_settings),
-      std::move(exit_app), "CrossDesk", localization_language_index_);
+      std::move(exit_app), "ReDesk", localization_language_index_);
 #elif (defined(__linux__) && !defined(__OHOS__))
   ui_->tray = std::make_unique<LinuxTray>(
       std::move(show_window), std::move(hide_window),
-      std::move(open_settings), std::move(exit_app), "CrossDesk",
+      std::move(open_settings), std::move(exit_app), "ReDesk",
       localization_language_index_);
 #endif
 #endif

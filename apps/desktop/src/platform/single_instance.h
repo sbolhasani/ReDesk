@@ -19,7 +19,7 @@ enum class InstanceResult { kAcquired, kAlreadyRunning, kError };
 // releases ownership on process exit, including crashes; no PID files to age out.
 class SingleInstanceGuard {
  public:
-  explicit SingleInstanceGuard(std::string application = "CrossDesk");
+  explicit SingleInstanceGuard(std::string application = "ReDesk");
   ~SingleInstanceGuard();
   SingleInstanceGuard(const SingleInstanceGuard&) = delete;
   SingleInstanceGuard& operator=(const SingleInstanceGuard&) = delete;

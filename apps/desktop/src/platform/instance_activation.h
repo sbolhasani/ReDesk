@@ -22,7 +22,7 @@ namespace crossdesk::platform {
 // itself.
 class InstanceActivationReceiver {
  public:
-  explicit InstanceActivationReceiver(std::string application = "CrossDesk");
+  explicit InstanceActivationReceiver(std::string application = "ReDesk");
   ~InstanceActivationReceiver();
   InstanceActivationReceiver(const InstanceActivationReceiver&) = delete;
   InstanceActivationReceiver& operator=(const InstanceActivationReceiver&) =

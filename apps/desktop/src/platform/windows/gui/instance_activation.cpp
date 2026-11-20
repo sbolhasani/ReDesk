@@ -9,8 +9,8 @@
 namespace crossdesk::platform {
 namespace {
 
-constexpr wchar_t kWindowClass[] = L"CrossDesk.InstanceActivationWindow";
-constexpr wchar_t kActivationMessage[] = L"CrossDesk.ActivateMainWindow.v1";
+constexpr wchar_t kWindowClass[] = L"ReDesk.InstanceActivationWindow";
+constexpr wchar_t kActivationMessage[] = L"ReDesk.ActivateMainWindow.v1";
 constexpr ULONGLONG kStartupWaitMs = 5000;
 
 std::wstring ActivationWindowName(const std::string& application,
@@ -153,7 +153,7 @@ bool RequestInstanceActivation(std::string& error, const std::string& applicatio
     if (GetTickCount64() >= deadline) break;
     Sleep(50);
   } while (true);
-  error = "Cannot notify the existing CrossDesk window on this desktop: " +
+  error = "Cannot notify the existing ReDesk window on this desktop: " +
           std::to_string(last_error);
   return false;
 }
