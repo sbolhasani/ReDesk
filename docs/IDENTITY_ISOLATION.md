@@ -49,3 +49,19 @@ fully draws immediately. Repeat when the first instance is already visible,
 and when maximized. Also test minimizing and restoring normally. If this
 persists, compare hardware Slint rendering and `SLINT_BACKEND=winit-software`
 on the same machine to diagnose renderer-specific invalidation.
+
+## Known limitation: RDP session repaint (deferred)
+
+On Windows in a Remote Desktop (RDP) session, activating an already-running ReDesk
+by launching a second instance can restore the window with most client content
+blank (only the titlebar Close control visible). A subsequent minimize/maximize
+repaints the UI. The same scenario was reported working on a local Windows
+desktop. The bounded redraw/InvalidateRect workaround in this branch did **not**
+fix the RDP case. This is **unresolved**, not a verified CrossDesk upstream bug.
+
+Future diagnostics: reproduce with the identical upstream binary over RDP,
+compare default Slint/Winit backend with `SLINT_BACKEND=winit-software`, check
+renderer/device loss and occlusion after window activation, and test restore
+from minimized vs tray-hidden states. Do not change window size to hide the
+symptom. The initial desktop identity work may proceed, but full RDP repaint
+correctness has not been verified.
