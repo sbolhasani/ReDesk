@@ -78,15 +78,15 @@ switch ($Action) {
         # No -c: retain local configuration and globally installed Xmake packages.
         # Run this only for a fresh checkout or a deliberately changed build configuration.
         Prepare-Dav1d
-        Invoke-Xmake @("f", "-p", "windows", "-a", "x64", "-m", "release",
+        Invoke-Xmake -arguments @("f", "-p", "windows", "-a", "x64", "-m", "release",
             "--USE_CUDA=false", "--CROSSDESK_PORTABLE=true", "-y")
     }
     "Inspect" {
-        Invoke-Xmake @("show", "-t", $Target)
+        Invoke-Xmake -arguments @("show", "-t", $Target)
         & git status --short
     }
     "Build" {
         # NEVER configure, clean, or reinstall here.
-        Invoke-Xmake @("b", $Target)
+        Invoke-Xmake -arguments @("b", $Target)
     }
 }
