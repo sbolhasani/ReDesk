@@ -78,3 +78,36 @@ build: the GUI already accepts a configurable `wss://` host and path on 443.
 Future milestones: complete protocol compatibility and reconnect testing;
 optionally introduce Cloudflare Realtime TURN or a separate coturn host; then
 roll out account/admin controls, scalability and reliable session tickets.
+
+## Two-device online presence regression (2026-11-21)
+
+Both ReDesk clients could authenticate to Cloudflare and receive their
+self-hosted 9-digit IDs, but their presence checks returned `offline`.
+The client's `recent_connections_presence` request and the Worker's
+`presence` response have matching message shapes. The Worker previously
+required `ws.readyState === 1` on a Durable Object server-side WebSocket
+returned by `getWebSockets()`. Presence now resolves the authenticated
+device using the persistent attachment instead. A one-shot
+`subscribe:false` presence probe no longer wipes the client's existing
+subscriptions.
+
+The regression has in-memory two-device tests in
+`test/presence.test.js`. They do not prove deployed Cloudflare runtime
+behavior. Test after redeployment:
+
+```powershell
+cd cloudflare\signal
+npm run check
+npm run deploy
+```
+
+Keep both clients open, wait for their signaling indicators to report
+connected, then try connecting from A to B and from B to A. Do not reset
+their self-hosted identities or clear their caches. This change only
+requires a Worker deployment, not a C++ rebuild. A device receiving a
+login ID is not proof of remote peer reachability; test the actual presence
+probe and the subsequent ICE connection separately.
+
+For temporary aggregate presence diagnostics (no device IDs logged), set
+`DEBUG_PRESENCE = "1"` in the Worker's `[vars]` configuration and
+redeploy, then view `wrangler tail`. Disable after diagnosis.
