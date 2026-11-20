@@ -6,7 +6,7 @@
 !define PRODUCT_VERSION "${VERSION}"
 !define PRODUCT_VERSION_NUMERIC "${VERSION_NUMERIC}"
 !define PRODUCT_PUBLISHER "ReDesk"
-!define PRODUCT_WEB_SITE "https://www.redesk.cn/"
+!define PRODUCT_WEB_SITE "https://github.com/sbolhasani/ReDesk"
 !define APP_NAME "ReDesk"
 !define UNINSTALL_REG_KEY "ReDesk"
 !define PRODUCT_SERVICE_NAME "ReDeskService"
@@ -67,6 +67,15 @@ InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallDir"
 ShowInstDetails show
 
 Section "MainSection"
+    ; Never install ReDesk into a folder containing a CrossDesk installation.
+    ; This also protects its binaries from a later recursive ReDesk uninstall.
+    IfFileExists "$INSTDIR\CrossDesk.exe" unsafeCrossDeskInstall 0
+    IfFileExists "$INSTDIR\crossdesk_service.exe" unsafeCrossDeskInstall 0
+    Goto safeInstallDirectory
+unsafeCrossDeskInstall:
+    MessageBox MB_ICONSTOP|MB_OK "This directory contains CrossDesk. Select a separate folder for ReDesk to avoid damaging CrossDesk during installation or removal."
+    Abort
+safeInstallDirectory:
     ; The updater has already coordinated shutdown. Never kill unrelated
     ; instances by name during an unattended upgrade.
     ${If} $UpdateMode = 1
@@ -102,7 +111,7 @@ installApp:
     SetOverwrite on
 
     ; Main application executable path
-    File /oname=ReDesk.exe "..\..\..\..\build\windows\x64\release\redesk.exe"
+    File /oname=ReDesk.exe "..\..\..\..\build\windows\x64\release\ReDesk.exe"
     File "..\..\..\..\build\windows\x64\release\redesk_updater.exe"
     ; Bundle service-side binaries required by the Windows service flow
     File "..\..\..\..\build\windows\x64\release\redesk_service.exe"
@@ -153,6 +162,14 @@ Section -AdditionalIcons
 SectionEnd
 
 Section "Uninstall"
+    ; Abort instead of recursively deleting a shared CrossDesk folder.
+    IfFileExists "$INSTDIR\CrossDesk.exe" unsafeCrossDeskUninstall 0
+    IfFileExists "$INSTDIR\crossdesk_service.exe" unsafeCrossDeskUninstall 0
+    Goto safeUninstallDirectory
+unsafeCrossDeskUninstall:
+    MessageBox MB_ICONSTOP|MB_OK "CrossDesk files were found in this folder. ReDesk uninstall is blocked to protect them. Separate the installations before uninstalling."
+    Abort
+safeUninstallDirectory:
     ; Check if ReDesk is running
     StrCpy $1 "ReDesk.exe"
     
