@@ -9,6 +9,6 @@ CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "crossdesk_portable.manifest"
 
 #define CROSSDESK_PRODUCT_NAME "ReDesk"
 #define CROSSDESK_FILE_DESCRIPTION "ReDesk Portable"
-#define CROSSDESK_ORIGINAL_FILENAME "CrossDesk.exe"
+#define CROSSDESK_ORIGINAL_FILENAME "ReDesk.exe"
 
 #include "version_info.rcinc"

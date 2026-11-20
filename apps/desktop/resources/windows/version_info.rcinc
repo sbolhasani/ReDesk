@@ -41,7 +41,7 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName", "CrossDesk\0"
+            VALUE "CompanyName", "ReDesk\0"
             VALUE "FileDescription", CROSSDESK_FILE_DESCRIPTION "\0"
             VALUE "FileVersion", CROSSDESK_VERSION_STRING "\0"
             VALUE "InternalName", CROSSDESK_ORIGINAL_FILENAME "\0"
