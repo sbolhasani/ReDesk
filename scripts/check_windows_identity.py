@@ -102,6 +102,31 @@ if "    Call un.RemoveUsbmmiddDriver" in nsis:
 if "Copyright (C) CrossDesk contributors" not in nsis:
     failures.append("NSIS must preserve the upstream CrossDesk attribution")
 
+# Keep installer/runtime filenames in sync. Xmake uses "ReDesk.exe" as the
+# Windows target basename; NSIS must package that exact file, not the former
+# lower-case "redesk.exe" used before the target rename.
+if r'build\windows\x64\release\ReDesk.exe' not in nsis:
+    failures.append("NSIS must package build output ReDesk.exe with the correct case")
+if r'build\windows\x64\release\redesk.exe' in nsis:
+    failures.append("NSIS still packages nonexistent lower-case redesk.exe")
+
+# A custom installation directory must never reuse an existing CrossDesk
+# directory: recursive uninstall would otherwise remove CrossDesk binaries.
+if 'IfFileExists "$INSTDIR\\CrossDesk.exe" unsafeCrossDeskInstall 0' not in nsis:
+    failures.append("NSIS must block install into a CrossDesk directory")
+if 'IfFileExists "$INSTDIR\\CrossDesk.exe" unsafeCrossDeskUninstall 0' not in nsis:
+    failures.append("NSIS must block removal of a mixed CrossDesk directory")
+if 'https://www.redesk.cn' in nsis:
+    failures.append("NSIS uses an unverified project website")
+if 'https://github.com/sbolhasani/ReDesk' not in nsis:
+    failures.append("NSIS must link to the verified project repository")
+
+# This Linux environment variable belongs to upstream runtime startup.
+# Windows-only branding must not accidentally break its existing contract.
+main_cpp = source("apps/desktop/src/app/main.cpp")
+if main_cpp.count('"CROSSDESK_HEADLESS_ACTIVE"') != 2:
+    failures.append("Linux headless supervisor environment contract changed")
+
 if failures:
     for failure in failures:
         print("FAIL:", failure)
