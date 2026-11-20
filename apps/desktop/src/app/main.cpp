@@ -267,6 +267,15 @@ static int ExitForExistingInstance(
 static int RunApplication(int argc, char* argv[]) {
   // The instance guards are held before any configuration or logger is opened.
   auto path_manager = std::make_unique<crossdesk::PathManager>("ReDesk");
+#if defined(_WIN32) && CROSSDESK_PORTABLE
+  // Never reuse the old CrossDesk portable data folder, and ensure the
+  // brand-specific directories exist before the config file is first saved.
+  if (!path_manager->CreateDirectories(path_manager->GetCachePath()) ||
+      !path_manager->CreateDirectories(path_manager->GetLogPath())) {
+    std::cerr << "Cannot initialize ReDesk portable storage directories\n";
+    return 1;
+  }
+#endif
   crossdesk::InitLogger(path_manager->GetLogPath().string());
 
 #ifdef _WIN32

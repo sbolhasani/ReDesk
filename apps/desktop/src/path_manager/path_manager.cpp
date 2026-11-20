@@ -29,6 +29,9 @@ PathManager::PathManager(const std::string& app_name) : app_name_(app_name) {}
 
 std::filesystem::path PathManager::GetConfigPath() {
 #if CROSSDESK_PORTABLE
+#ifdef _WIN32
+  if (app_name_ == "ReDesk") return GetPortableRootPath() / "redesk-data";
+#endif
   return GetPortableRootPath() / "data";
 #else
   return platform::GetConfigPath(app_name_);
@@ -37,6 +40,9 @@ std::filesystem::path PathManager::GetConfigPath() {
 
 std::filesystem::path PathManager::GetCachePath() {
 #if CROSSDESK_PORTABLE
+#ifdef _WIN32
+  if (app_name_ == "ReDesk") return GetPortableRootPath() / "redesk-data";
+#endif
   return GetPortableRootPath() / "data";
 #else
   return platform::GetCachePath(app_name_);
@@ -45,6 +51,9 @@ std::filesystem::path PathManager::GetCachePath() {
 
 std::filesystem::path PathManager::GetLogPath() {
 #if CROSSDESK_PORTABLE
+#ifdef _WIN32
+  if (app_name_ == "ReDesk") return GetPortableRootPath() / "redesk-logs";
+#endif
   return GetPortableRootPath() / "logs";
 #else
   return platform::GetLogPath(app_name_);
