@@ -12,6 +12,9 @@ const CHALLENGE_MS = 30_000;
 const MAX_CONNECTIONS = 200; // Single hub is for initial testing, not scaling.
 const ICE_LIFETIME = 1800;
 const ID = /^\d{9}$/;
+// MiniRTC creates a second signaling connection for each outgoing session,
+// using C-<own ID>. It must prove possession of the registered device key.
+const SESSION_ID = /^C-\d{9}$/;
 const HEX32 = /^[0-9a-f]{64}$/;
 const HEX64 = /^[0-9a-f]{128}$/;
 const ROOM_FIELDS = new Set(["offer", "answer", "new_candidate", "new_candidate_mid"]);
@@ -31,6 +34,8 @@ function randomDigits(n) {
 }
 function now() { return Math.floor(Date.now() / 1000); }
 function validName(s) { return typeof s === "string" && ID.test(s); }
+function validPeerName(s) { return typeof s === "string" && (ID.test(s) || SESSION_ID.test(s)); }
+function ownerId(s) { return SESSION_ID.test(s) ? s.slice(2) : s; }
 function safeSend(socket, obj) {
   try { socket.send(JSON.stringify(obj)); return true; } catch { return false; }
 }
@@ -104,7 +109,7 @@ export class SignalHub {
   }
 
   socket(id) {
-    if (!validName(id)) return null;
+    if (!validPeerName(id)) return null;
     // getWebSockets() returns sockets still associated with this Durable Object,
     // including those restored after WebSocket hibernation. Some runtime/mock
     // adapters don't expose readyState consistently on these server-side
@@ -115,7 +120,7 @@ export class SignalHub {
       return state?.phase === "authenticated" && state.user === id;
     }) ?? null;
   }
-  online(id) { return this.socket(id) !== null; }
+  online(id) { return validName(id) && this.socket(id) !== null; }
   send(id, data) {
     const target = this.socket(id);
     return target ? safeSend(target, data) : false;
@@ -222,15 +227,19 @@ export class SignalHub {
         reject(socket,"invalid_login"); return;
       }
       const id = identifier(msg.user_id);
-      if (id !== "" && !validName(id)) { reject(socket,"invalid_id"); return; }
-      if (id && this.throttled(id)) { reject(socket,"rate_limited"); return; }
-      const account = id ? this.account(id) : null;
-      if (id && !account) { reject(socket,"unknown_id"); return; }
+      if (id !== "" && !validPeerName(id)) { reject(socket,"invalid_id"); return; }
+      const parent = ownerId(id);
+      if (parent && this.throttled(parent)) { reject(socket,"rate_limited"); return; }
+      const account = parent ? this.account(parent) : null;
+      if (parent && !account) { reject(socket,"unknown_id"); return; }
+      // C- sessions authenticate with their owner's Ed25519 key, not a
+      // reusable password. Never create a new device record for C- IDs.
+      const passwordRequired = Boolean(account) && !SESSION_ID.test(id);
       const nonce = randomHex();
       socket.serializeAttachment({phase:"challenge",at:Date.now(),user:null,id,
-        key:msg.device_key.public_key,nonce, passwordRequired:Boolean(account)});
+        key:msg.device_key.public_key,nonce, passwordRequired});
       safeSend(socket, {type:"login_challenge",user_id:id,nonce,device_key_version:1,
-        password_required:Boolean(account)});
+        password_required:passwordRequired});
       return;
     }
     if (state.phase !== "challenge" || Date.now() - state.at > CHALLENGE_MS) {
@@ -242,11 +251,21 @@ export class SignalHub {
     if (identifier(presented) !== id || !msg.device_key ||
         msg.device_key.public_key !== state.key || msg.device_key.nonce !== state.nonce ||
         !(await verifyProof(state.key, id, state.nonce, msg.device_key.signature))) {
-      this.failure(id); reject(socket,"invalid_proof", "login"); socket.close(1008,"Authentication failed"); return;
+      this.failure(ownerId(id)); reject(socket,"invalid_proof", "login"); socket.close(1008,"Authentication failed"); return;
     }
     let assigned = id;
     let initialPassword = null;
-    if (id) {
+    if (SESSION_ID.test(id)) {
+      // Only the physical device that owns the numeric ID may use C-<ID>.
+      // The signed challenge binds this temporary session to that device key.
+      const parent = ownerId(id);
+      const row = this.account(parent);
+      if (!row || row.public_key !== state.key || password || presented.includes("@")) {
+        this.failure(parent); reject(socket,"invalid_credentials","login");
+        socket.close(1008,"Authentication failed"); return;
+      }
+      this.clearFailure(parent);
+    } else if (id) {
       const row = this.account(id);
       if (!row || row.public_key !== state.key ||
           !ctEqual(row.hash, await passwordDigest(password, row.salt))) {
@@ -274,7 +293,9 @@ export class SignalHub {
     safeSend(socket,{type:"login",status:"success",
       user_id:initialPassword ? assigned+"@"+initialPassword : assigned,
       device_key_version:1,ice_config_version:1});
-    this.updatePresence(assigned,true);
+    // Viewer C- sessions are ephemeral and must not alter the owner's
+    // presence, which is based on the primary numeric-ID signaling socket.
+    if (validName(assigned)) this.updatePresence(assigned,true);
   }
 
   async join(socket, user, msg) {
@@ -301,14 +322,22 @@ export class SignalHub {
     const ice=iceSnapshot();
     // Host and viewer receive the same canonical transmission ID (without its
     // secret), plus the *other* endpoint's authenticated identity.
-    this.send(target,{type:"user_join_transmission",status:"success",
-      transmission_id:target,user_id:user,ice});
-    safeSend(socket,{type:"user_join_transmission",status:"success",
-      transmission_id:target,user_id:target,ice});
     const sessionTicket = {type:"session_ticket",transmission_id:target,
       host_id:target,guest_id:user,token:ticket};
-    this.send(target,sessionTicket);
+    // The host (offerer) alone receives user_join_transmission and creates
+    // the SDP offer. Sending user_join_transmission to the viewer too makes
+    // both peers offer simultaneously and resets ICE transports.
+    if (!this.send(target,sessionTicket)) {
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",ticket);
+      roomFail("remote_unavailable");
+      return;
+    }
     safeSend(socket,sessionTicket);
+    if (!this.send(target,{type:"user_join_transmission",status:"success",
+      transmission_id:target,user_id:user,ice})) {
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",ticket);
+      roomFail("remote_unavailable");
+    }
   }
   room(user,target,transmission) {
     this.ctx.storage.sql.exec("DELETE FROM sessions WHERE created<?", now()-7200);
@@ -318,7 +347,7 @@ export class SignalHub {
   }
   relay(socket,user,msg) {
     const target=msg.remote_user_id,transmission=identifier(msg.transmission_id ?? "");
-    if (!validName(target) || !validName(transmission) ||
+    if (!validPeerName(target) || !validName(transmission) ||
         !this.room(user,target,transmission)) {reject(socket,"not_in_session");return;}
     const payload=JSON.stringify(msg);
     if (payload.length>MAX_MESSAGE ||
@@ -355,6 +384,6 @@ export class SignalHub {
       this.send(other,{type:"user_leave_transmission",user_id:id,transmission_id:r.host});
       this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",r.token);
     }
-    if (!this.online(id)) this.updatePresence(id,false);
+    if (validName(id) && !this.online(id)) this.updatePresence(id,false);
   }
 }
