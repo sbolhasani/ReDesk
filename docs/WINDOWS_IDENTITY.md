@@ -120,3 +120,29 @@ No dependency cache reset, package rebuild, service install or NSIS
 installation is required. If you had already saved useful ReDesk credentials
 or settings to the legacy shared `data` directory, export or back those up
 first; this patch **does not silently copy sensitive identity files**.
+
+## Installer integration review (before privileged testing)
+
+The NSIS package now reads the actual case-preserved Xmake output
+`build/windows/x64/release/ReDesk.exe` (not a non-existent lower-case
+`redesk.exe`). The package URL points to the verified GitHub repository
+instead of an unverified `redesk.cn` domain.
+
+Installing into a directory containing `CrossDesk.exe` or
+`crossdesk_service.exe` is now blocked. Uninstall also refuses to recursively
+delete a directory containing either CrossDesk binary. This mitigates the
+highest-risk shared-directory collision; it is not a guarantee that any
+arbitrary non-standard install directory can be safely deleted.
+
+The Linux headless environment variable remains
+`CROSSDESK_HEADLESS_ACTIVE` for upstream compatibility. ReDesk UI branding
+must not change non-Windows runtime contracts.
+
+The non-invasive static audit can be run with:
+
+```powershell
+python scripts/check_windows_identity.py
+```
+
+Windows NSIS compilation and elevated SCM/installer integration are **not yet
+verified**. Do not run the installer on a production machine as the first test.
