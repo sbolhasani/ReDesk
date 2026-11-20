@@ -17,9 +17,9 @@
 namespace crossdesk {
 
 inline constexpr wchar_t kCrossDeskSessionHelperPipePrefix[] =
-    L"\\\\.\\pipe\\CrossDeskSessionHelper-";
+    L"\\\\.\\pipe\\ReDeskSessionHelper-";
 inline constexpr wchar_t kCrossDeskSecureInputHelperPipePrefix[] =
-    L"\\\\.\\pipe\\CrossDeskSecureInputHelper-";
+    L"\\\\.\\pipe\\ReDeskSecureInputHelper-";
 inline constexpr char kCrossDeskSessionHelperStatusCommand[] = "status";
 inline constexpr char kCrossDeskSecureInputKeyboardCommandPrefix[] =
     "keyboard:";
@@ -31,9 +31,9 @@ inline constexpr char kCrossDeskSecureInputCaptureStopCommand[] =
     "capture-stop";
 inline constexpr DWORD kCrossDeskSecureInputPipeBufferBytes = 16 * 1024 * 1024;
 inline constexpr wchar_t kCrossDeskSecureDesktopFrameMappingPrefix[] =
-    L"Global\\CrossDeskSecureDesktopFrame-";
+    L"Global\\ReDeskSecureDesktopFrame-";
 inline constexpr wchar_t kCrossDeskSecureDesktopFrameReadyEventPrefix[] =
-    L"Global\\CrossDeskSecureDesktopFrameReady-";
+    L"Global\\ReDeskSecureDesktopFrameReady-";
 inline constexpr uint32_t kCrossDeskSecureDesktopFrameMagic = 0x50444358;
 // Version 3 distinguishes embedded, hidden and unavailable cursor states.
 // The GUI and local session helper must be deployed together.

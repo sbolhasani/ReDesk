@@ -14,7 +14,7 @@ namespace {
 
 constexpr DWORD kStartupTimeoutMs = 3000;
 constexpr DWORD kRestartDelayMs = 1000;
-constexpr wchar_t kWindowClass[] = L"CrossDesk.RuntimeDaemon";
+constexpr wchar_t kWindowClass[] = L"ReDesk.RuntimeDaemon";
 
 struct Handle {
   HANDLE value = nullptr;

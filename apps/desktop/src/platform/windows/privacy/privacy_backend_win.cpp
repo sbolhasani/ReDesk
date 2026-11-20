@@ -26,7 +26,7 @@
 namespace crossdesk {
 namespace {
 
-constexpr wchar_t kClassName[] = L"CrossDesk.PrivacyWindow";
+constexpr wchar_t kClassName[] = L"ReDesk.PrivacyWindow";
 constexpr UINT kEmergency = WM_APP + 71;
 constexpr int kHotkeyId = 0x4353;
 

@@ -47,7 +47,7 @@ bool IsInstalledClient(HANDLE process) {
   DWORD capacity = ARRAYSIZE(client_path);
   if (!length || length >= ARRAYSIZE(service_path) ||
       !QueryFullProcessImageNameW(process, 0, client_path, &capacity)) return false;
-  const auto expected = std::filesystem::path(service_path).parent_path() / L"crossdesk.exe";
+  const auto expected = std::filesystem::path(service_path).parent_path() / L"redesk.exe";
   return _wcsicmp(expected.c_str(), client_path) == 0;
 }
 

@@ -1178,6 +1178,12 @@ int GuiApplication::Run() {
   if (!path_manager_) {
     return -1;
   }
+#if defined(_WIN32) && CROSSDESK_PORTABLE
+  if (!path_manager_->CreateDirectories(path_manager_->GetCachePath()) ||
+      !path_manager_->CreateDirectories(path_manager_->GetLogPath())) {
+    return -1;
+  }
+#endif
   exec_log_path_ = path_manager_->GetLogPath().string();
   dll_log_path_ = exec_log_path_;
   InitializeLogger();
@@ -1188,6 +1194,8 @@ int GuiApplication::Run() {
   announcements_.SetStorageDirectory(path_manager_->GetCachePath() /
                                      "announcement_reads");
   config_center_ = std::make_unique<ConfigCenter>(cache_path_ + "/config.ini");
+  LOG_INFO("ReDesk GUI language preference: {}",
+           static_cast<int>(config_center_->GetLanguage()));
 #ifdef _WIN32
   if (SupportsServiceAutostart() && SharedHostIdentity::Configured()) {
     // User-session features attach after unlock; the persistent host keeps

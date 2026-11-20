@@ -6,8 +6,8 @@
 
 IDI_CROSSDESK_LOGO ICON "crossdesk.ico"
 
-#define CROSSDESK_FILE_DESCRIPTION "CrossDesk Privacy Window"
-#define CROSSDESK_ORIGINAL_FILENAME "crossdesk_privacy_window.dll"
+#define CROSSDESK_FILE_DESCRIPTION "ReDesk Privacy Window"
+#define CROSSDESK_ORIGINAL_FILENAME "redesk_privacy_window.dll"
 #define CROSSDESK_FILE_TYPE VFT_DLL
 
 #include "version_info.rcinc"

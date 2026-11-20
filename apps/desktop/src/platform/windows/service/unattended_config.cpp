@@ -12,7 +12,7 @@
 
 namespace crossdesk {
 namespace {
-constexpr wchar_t kRegistryKey[] = L"SOFTWARE\\CrossDesk\\Unattended";
+constexpr wchar_t kRegistryKey[] = L"SOFTWARE\\ReDesk\\Unattended";
 constexpr wchar_t kDirectorySecurity[] =
     L"O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
 
@@ -60,7 +60,7 @@ std::filesystem::path UnattendedDataPath() {
   if (FAILED(SHGetKnownFolderPath(FOLDERID_ProgramData, KF_FLAG_DEFAULT,
                                   nullptr, &value)))
     return {};
-  const auto path = std::filesystem::path(value) / L"CrossDeskUnattended";
+  const auto path = std::filesystem::path(value) / L"ReDeskUnattended";
   CoTaskMemFree(value);
   return path;
 }

@@ -18,7 +18,7 @@ std::wstring GetExecutablePath() {
 
 void PrintUsage() {
   std::cout
-      << "CrossDesk Windows service skeleton\n"
+      << "ReDesk Windows service skeleton\n"
       << "  --service    Run under the Windows Service Control Manager\n"
       << "  --console    Run the service loop in console mode\n"
       << "  --install    Install the service for the current executable\n"

@@ -74,7 +74,7 @@ bool PrivacyCursorGuard::Start(std::string& error, const std::wstring& desktop,
   if (!count || count >= module.size())
     return Failed("GetModuleFileNameW", error);
   const auto helper = std::filesystem::path(module.data()).parent_path() /
-                      L"crossdesk_privacy_cursor_helper.exe";
+                      L"redesk_privacy_cursor_helper.exe";
   SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
   Handle parent;
   Handle owner;
@@ -130,7 +130,7 @@ bool PrivacyCursorGuard::Start(std::string& error, const std::wstring& desktop,
   DeleteProcThreadAttributeList(startup.lpAttributeList);
   if (!ok) {
     UnmapViewOfFile(shared);
-    return Failed("Start crossdesk_privacy_cursor_helper.exe", error,
+    return Failed("Start redesk_privacy_cursor_helper.exe", error,
                   start_error);
   }
   if (used_job_fallback) {

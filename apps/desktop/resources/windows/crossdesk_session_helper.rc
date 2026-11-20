@@ -9,7 +9,7 @@ IDI_ICON1 ICON "crossdesk.ico"
 // from starting with CreateProcessAsUserW in installed release builds (740).
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "crossdesk_session_helper.manifest"
 
-#define CROSSDESK_FILE_DESCRIPTION "CrossDesk Session Helper"
-#define CROSSDESK_ORIGINAL_FILENAME "crossdesk_session_helper.exe"
+#define CROSSDESK_FILE_DESCRIPTION "ReDesk Session Helper"
+#define CROSSDESK_ORIGINAL_FILENAME "redesk_session_helper.exe"
 
 #include "version_info.rcinc"
