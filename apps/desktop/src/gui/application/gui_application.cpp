@@ -1136,6 +1136,10 @@ struct GuiApplication::SlintUi {
   std::unique_ptr<platform::InstanceActivationReceiver> activation_receiver;
 #endif
 #if _WIN32
+  // Retry repaints after Win32 restores/activates the Slint window. A redraw
+  // requested before Winit exposes the native window can be lost.
+  int main_restore_redraws_left = 0;
+  int main_restore_visibility_wait_ticks = 0;
   std::unique_ptr<WinTray> tray;
 #elif defined(__APPLE__)
   std::unique_ptr<MacTray> tray;
@@ -1170,7 +1174,7 @@ int GuiApplication::Run() {
   std::string activation_error;
   activation_receiver->Start(activation_error);
 #endif
-  path_manager_ = std::make_unique<PathManager>("CrossDesk");
+  path_manager_ = std::make_unique<PathManager>("ReDesk");
   if (!path_manager_) {
     return -1;
   }
@@ -1506,6 +1510,10 @@ void GuiApplication::ShowMainWindow(const std::string& activation_token) {
   ConfigureWindowsWindowIcons(window);
   ShowWindow(window, IsIconic(window) ? SW_RESTORE : SW_SHOW);
   SetForegroundWindow(window);
+  // Let the native window become visible before requesting new Slint frames.
+  // Do not resize the window or change its renderer just to force a repaint.
+  ui_->main_restore_redraws_left = 4;
+  ui_->main_restore_visibility_wait_ticks = 30;
 #endif
 #if defined(__APPLE__)
   ConfigureMainWindowChrome(ui_->main->window().appkit_view());
@@ -1546,19 +1554,19 @@ void GuiApplication::InitializeSystemTray() {
   ui_->tray = std::make_unique<WinTray>(
       std::move(show_window), std::move(hide_window),
       std::move(open_settings), std::move(exit_app), LoadSlintTrayIcon(),
-      L"CrossDesk", localization_language_index_);
+      L"ReDesk", localization_language_index_);
 #elif defined(__APPLE__)
   ui_->tray = std::make_unique<MacTray>(
       std::move(show_window), std::move(hide_window), std::move(open_settings),
-      std::move(exit_app), "CrossDesk", localization_language_index_);
+      std::move(exit_app), "ReDesk", localization_language_index_);
 #elif defined(__OHOS__)
   ui_->tray = std::make_unique<HarmonyTray>(
       std::move(show_window), std::move(hide_window), std::move(open_settings),
-      std::move(exit_app), "CrossDesk", localization_language_index_);
+      std::move(exit_app), "ReDesk", localization_language_index_);
 #elif (defined(__linux__) && !defined(__OHOS__))
   ui_->tray = std::make_unique<LinuxTray>(
       std::move(show_window), std::move(hide_window),
-      std::move(open_settings), std::move(exit_app), "CrossDesk",
+      std::move(open_settings), std::move(exit_app), "ReDesk",
       localization_language_index_);
 #endif
 #endif
@@ -2744,6 +2752,26 @@ void GuiApplication::Tick() {
   if (ui_->tray && ui_->tray->TakeReopenRequest()) activation_requested = true;
 #endif
   if (activation_requested) ShowMainWindow(activation_token);
+#endif
+#if defined(_WIN32)
+  // A foreground request can complete before Winit/Slint processes the
+  // restore. Redraw on subsequent event-loop ticks after the HWND is visible.
+  // This is bounded (four frames) and does not affect regular rendering.
+  if (ui_->main_restore_redraws_left > 0) {
+    auto& window = ui_->main->window();
+    const HWND hwnd = window.win32_hwnd();
+    if (hwnd && IsWindow(hwnd) && IsWindowVisible(hwnd) && !IsIconic(hwnd)) {
+      if (ui_->main_restore_redraws_left == 4) {
+        // Ensure Windows delivers a paint event for the whole client area,
+        // including regions left blank by a minimized/occluded window.
+        InvalidateRect(hwnd, nullptr, FALSE);
+      }
+      window.request_redraw();
+      --ui_->main_restore_redraws_left;
+    } else if (--ui_->main_restore_visibility_wait_ticks <= 0) {
+      ui_->main_restore_redraws_left = 0;
+    }
+  }
 #endif
 #if (defined(__linux__) && !defined(__OHOS__)) && !defined(__APPLE__)
   if (ui_->main_activation_attempts > 0) {

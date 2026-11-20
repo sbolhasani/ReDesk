@@ -238,9 +238,9 @@ static crossdesk::platform::InstanceResult AcquireInstance(
   std::string error;
   const auto result = guard.TryAcquire(role, error);
   if (result == crossdesk::platform::InstanceResult::kAlreadyRunning) {
-    std::cerr << "CrossDesk is already running for this user.\n";
+    std::cerr << "ReDesk is already running for this user.\n";
   } else if (result == crossdesk::platform::InstanceResult::kError) {
-    std::cerr << "CrossDesk cannot start: " << error << '\n';
+    std::cerr << "ReDesk cannot start: " << error << '\n';
   }
   return result;
 }
@@ -250,14 +250,14 @@ static int ExitForExistingInstance(
   if (interactive_launch &&
       result == crossdesk::platform::InstanceResult::kAlreadyRunning) {
     std::string error;
-    if (!crossdesk::platform::RequestInstanceActivation(error)) {
+    if (!crossdesk::platform::RequestInstanceActivation(error, "ReDesk")) {
       std::cerr << error << '\n';
 #ifdef _WIN32
       MessageBoxW(nullptr,
-                  L"CrossDesk is already running, but its window could not be "
+                  L"ReDesk is already running, but its window could not be "
                   L"activated.\n\nIt may still be starting or be running in "
                   L"another Windows session. Please check the system tray.",
-                  L"CrossDesk", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+                  L"ReDesk", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
 #endif
     }
   }
@@ -266,12 +266,12 @@ static int ExitForExistingInstance(
 
 static int RunApplication(int argc, char* argv[]) {
   // The instance guards are held before any configuration or logger is opened.
-  auto path_manager = std::make_unique<crossdesk::PathManager>("CrossDesk");
+  auto path_manager = std::make_unique<crossdesk::PathManager>("ReDesk");
   crossdesk::InitLogger(path_manager->GetLogPath().string());
 
 #ifdef _WIN32
   crossdesk::get_logger()->info(
-      "CrossDesk executable: {}",
+      "ReDesk executable: {}",
       std::filesystem::path(crossdesk::platform::CurrentExecutablePath()).u8string());
 #endif
 
@@ -296,7 +296,7 @@ static int RunApplication(int argc, char* argv[]) {
     enable_daemon = config_center.IsEnableDaemon();
 #ifdef __linux__
     if (config_center.IsEnableAutostart() &&
-        !crossdesk::platform::MigrateLegacyAutostart("CrossDesk")) {
+        !crossdesk::platform::MigrateLegacyAutostart("ReDesk")) {
       crossdesk::get_logger()->warn(
           "Could not migrate the legacy Linux autostart entry");
     }
@@ -368,7 +368,7 @@ int main(int argc, char* argv[]) {
   }
   auto& console = crossdesk::HeadlessConsole::Instance();
   if (argc == 2 && std::strcmp(argv[1], "--headless-help") == 0) {
-    crossdesk::PathManager paths("CrossDesk");
+    crossdesk::PathManager paths("ReDesk");
     CSimpleIniA config;
     config.SetUnicode(true);
     config.LoadFile((paths.GetCachePath() / "config.ini").string().c_str());
@@ -408,13 +408,13 @@ int main(int argc, char* argv[]) {
   // Installer maintenance must not start the GUI or the process supervisor.
   if (argc == 2 && (std::strcmp(argv[1], "--autostart-migrate") == 0 ||
                     std::strcmp(argv[1], "--autostart-uninstall") == 0)) {
-    crossdesk::PathManager paths("CrossDesk");
+    crossdesk::PathManager paths("ReDesk");
     crossdesk::InitLogger(paths.GetLogPath().string(),
                           "crossdesk-autostart-cli");
     const bool success =
         std::strcmp(argv[1], "--autostart-migrate") == 0
             ? crossdesk::CleanupLegacyServiceAutostart()
-            : crossdesk::platform::RemoveInstalledAutostart("CrossDesk");
+            : crossdesk::platform::RemoveInstalledAutostart("ReDesk");
     return success ? 0 : 1;
   }
   if (argc == 2 &&
@@ -430,7 +430,7 @@ int main(int argc, char* argv[]) {
     if (!unattended_change &&
         AcquireInstance(cli_instance, crossdesk::platform::InstanceRole::kServiceCli) !=
             crossdesk::platform::InstanceResult::kAcquired) return 1;
-    crossdesk::PathManager paths("CrossDesk");
+    crossdesk::PathManager paths("ReDesk");
     crossdesk::InitLogger(paths.GetLogPath().string(), "crossdesk-service-cli");
     return HandleServiceCliCommand(argv[1]);
   }
@@ -463,7 +463,7 @@ int main(int argc, char* argv[]) {
 #ifdef __linux__
   const int exit_code = crossdesk::RunWithLinuxDisplay(
       argc, argv, [&] { return RunApplication(argc, argv); }, [&] {
-        crossdesk::PathManager paths("CrossDesk");
+        crossdesk::PathManager paths("ReDesk");
         if (console.Enable(paths.GetLogPath(), paths.GetCachePath() / "config.ini")) return true;
         std::cerr << "无法初始化日志或控制台，启动失败。\n";
         return false;
