@@ -250,7 +250,7 @@ static int ExitForExistingInstance(
   if (interactive_launch &&
       result == crossdesk::platform::InstanceResult::kAlreadyRunning) {
     std::string error;
-    if (!crossdesk::platform::RequestInstanceActivation(error)) {
+    if (!crossdesk::platform::RequestInstanceActivation(error, "ReDesk")) {
       std::cerr << error << '\n';
 #ifdef _WIN32
       MessageBoxW(nullptr,
