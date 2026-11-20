@@ -43,7 +43,7 @@ struct InfrastructureState {
   std::mutex audio_delivery_mutex_;
   std::unique_ptr<ConfigCenter> config_center_;
   ConfigCenter::LANGUAGE localization_language_ =
-      ConfigCenter::LANGUAGE::CHINESE;
+      ConfigCenter::LANGUAGE::ENGLISH;
   std::unique_ptr<PathManager> path_manager_;
   std::string exec_log_path_;
   std::string dll_log_path_;
