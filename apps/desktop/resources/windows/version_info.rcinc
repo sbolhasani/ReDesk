@@ -16,6 +16,10 @@
 #define CROSSDESK_ORIGINAL_FILENAME "CrossDesk.exe"
 #endif
 
+#ifndef CROSSDESK_PRODUCT_NAME
+#define CROSSDESK_PRODUCT_NAME "CrossDesk"
+#endif
+
 #ifndef CROSSDESK_FILE_TYPE
 #define CROSSDESK_FILE_TYPE VFT_APP
 #endif
@@ -43,7 +47,7 @@ BEGIN
             VALUE "InternalName", CROSSDESK_ORIGINAL_FILENAME "\0"
             VALUE "LegalCopyright", "Copyright (C) CrossDesk contributors\0"
             VALUE "OriginalFilename", CROSSDESK_ORIGINAL_FILENAME "\0"
-            VALUE "ProductName", "CrossDesk\0"
+            VALUE "ProductName", CROSSDESK_PRODUCT_NAME "\0"
             VALUE "ProductVersion", CROSSDESK_VERSION_STRING "\0"
         END
     END

@@ -340,8 +340,8 @@ bool X11ActivateWindow(Display* display, const slint::Window& target,
       const std::string_view title = name && name_format == 8
           ? std::string_view(reinterpret_cast<char*>(name), length)
           : std::string_view{};
-      const bool matches = gallery_window ? title.starts_with("CrossDesk ")
-                                          : title == "CrossDesk";
+      const bool matches = gallery_window ? title.starts_with("ReDesk ")
+                                          : title == "ReDesk";
       if (name) XFree(name);
       if (!matches) continue;
       XEvent event{};

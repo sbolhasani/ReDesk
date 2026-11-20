@@ -131,13 +131,13 @@ export global UiStrings {
     in-out property <string> wayland-recommendation-title;
     in-out property <string> wayland-recommendation-message;
     in-out property <string> wayland-notice-acknowledge: "Got it";
-    in-out property <string> service-setup-title: "Install CrossDesk Service";
+    in-out property <string> service-setup-title: "Install ReDesk Service";
     in-out property <string> service-setup-message: "Administrator permission is required to control this device while it is locked.";
     in-out property <string> service-settings-label: "Lock-screen control service";
     in-out property <string> install-service: "Install";
     in-out property <string> service-installed: "Installed";
     in-out property <string> repair-service: "Repair";
-    in-out property <string> service-repair-title: "Repair CrossDesk Service";
+    in-out property <string> service-repair-title: "Repair ReDesk Service";
     in-out property <string> service-repair-message;
     in-out property <string> do-not-remind: "Do not remind again";
     in-out property <string> notification: "Notification";
@@ -362,7 +362,7 @@ component PasswordInput inherits FlatSurface {
 }
 
 export component MainWindow inherits Window {
-    title: root.gallery-mode ? "CrossDesk " + GalleryStrings.texts[54] : "CrossDesk";
+    title: root.gallery-mode ? "ReDesk " + GalleryStrings.texts[54] : "ReDesk";
     icon: @image-url("../../../resources/linux/crossdesk_256x256.png");
     preferred-width: root.minimum-window-width;
     preferred-height: root.minimum-window-height;
@@ -3329,7 +3329,7 @@ export component MainWindow inherits Window {
                         product-info := VerticalLayout {
                             x: 88px; y: 16px; width: parent.width - 104px; height: parent.height - 32px;
                             alignment: center; spacing: 5px;
-                            Text { text: "CrossDesk"; font-size: 22px; font-weight: 600; color: WorkbenchStyle.text; }
+                            Text { text: "ReDesk"; font-size: 22px; font-weight: 600; color: WorkbenchStyle.text; }
                             Text {
                                 text: UiStrings.version + " " + root.current-version;
                                 color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;

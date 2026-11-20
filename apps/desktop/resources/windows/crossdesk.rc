@@ -10,7 +10,8 @@ CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "crossdesk_debug.manifest"
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "crossdesk.manifest"
 #endif
 
-#define CROSSDESK_FILE_DESCRIPTION "CrossDesk"
+#define CROSSDESK_PRODUCT_NAME "ReDesk"
+#define CROSSDESK_FILE_DESCRIPTION "ReDesk"
 #define CROSSDESK_ORIGINAL_FILENAME "CrossDesk.exe"
 
 #include "version_info.rcinc"
