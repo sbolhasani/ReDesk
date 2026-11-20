@@ -342,6 +342,7 @@ function setup_targets()
     if is_os("windows") then
         target("crossdesk_privacy_window")
             set_kind("shared")
+            if is_plat("windows") then set_basename("redesk_privacy_window") end
             set_runtimes("MT")
             add_files("apps/desktop/src/platform/windows/privacy/band_module/main.cpp")
             add_files("apps/desktop/src/platform/windows/privacy/band_module/privacy_cover_renderer.cpp")
@@ -351,6 +352,7 @@ function setup_targets()
 
         target("crossdesk_privacy_cursor_helper")
             set_kind("binary")
+            if is_plat("windows") then set_basename("redesk_privacy_cursor_helper") end
             add_files("apps/desktop/src/platform/windows/privacy/cursor_helper/main.cpp")
     end
 
@@ -595,6 +597,7 @@ function setup_targets()
     if not is_config("CROSSDESK_PORTABLE", true) then
         target("crossdesk_updater")
             set_kind("binary")
+            if is_plat("windows") then set_basename("redesk_updater") end
             add_deps("updater_core", "single_instance")
             add_packages("nlohmann_json")
             add_files("apps/desktop/src/updater/main.cpp")
@@ -745,6 +748,7 @@ function setup_targets()
 
         target("crossdesk_service")
             set_kind("binary")
+            if is_plat("windows") then set_basename("redesk_service") end
             add_packages("nlohmann_json")
             add_includedirs("libs/wire/include")
             add_deps("rd_log", "path_manager", "windows_unattended_config")
@@ -759,6 +763,7 @@ function setup_targets()
 
         target("crossdesk_session_helper")
             set_kind("binary")
+            if is_plat("windows") then set_basename("redesk_session_helper") end
               add_deps("crossdesk_privacy_cursor_helper", {inherit = false})
               add_deps("wgc_plugin", {inherit = false})
             add_packages("libyuv", "nlohmann_json")
@@ -782,6 +787,7 @@ function setup_targets()
 
     target("crossdesk")
         set_kind("binary")
+            if is_plat("windows") then set_basename("ReDesk") end
         add_deps("rd_log", "desktop_common", "gui", "single_instance")
         if not is_config("CROSSDESK_PORTABLE", true) then
             add_deps("crossdesk_updater", {inherit = false})
