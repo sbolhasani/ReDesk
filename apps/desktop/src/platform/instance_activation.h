@@ -52,7 +52,7 @@ class InstanceActivationReceiver {
 // Targets the current user's GUI on the current desktop, including a daemon
 // child. Waits briefly for startup/restart, without waiting on its UI thread.
 bool RequestInstanceActivation(std::string& error,
-                               const std::string& application = "CrossDesk");
+                               const std::string& application = "ReDesk");
 
 }  // namespace crossdesk::platform
 
