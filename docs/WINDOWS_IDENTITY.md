@@ -81,3 +81,42 @@ throwaway Windows VM/snapshot before public release.
 
 The previously observed RDP-only Slint repaint problem remains separately
 documented and unresolved.
+
+## Localization regression after renaming the Windows executable
+
+The first Windows portable test confirmed the renamed executables build and run,
+but the main UI opened in Chinese. Two root causes were found:
+
+1. The brand-independent portable path manager pointed **both CrossDesk and
+   ReDesk** at the same `data/config.ini` directory alongside the executable.
+   The newly named `ReDesk.exe` could therefore inherit an old CrossDesk
+   `language=0` (Chinese) preference.
+2. On a first run with no cached credential identity, `SettingsManager::Load()`
+   returns early before transferring the configured language into the GUI's
+   language-button state (which also defaulted to Chinese).
+
+Windows ReDesk portable builds now use **`redesk-data`** and
+**`redesk-logs`** beside the executable, and create these directories before
+reading or writing settings. Existing `data` and `logs` are not moved,
+overwritten or deleted. The GUI initializes its language preference before the
+credential cache early return. English remains the default on a fresh install,
+while a user-selected existing ReDesk language remains honored.
+
+### Targeted regression test
+
+```powershell
+git pull --ff-only origin work/redesk-windows-identity-02
+.\scripts\build.ps1
+xmake r crossdesk
+```
+
+Confirm **English** with no prior `redesk-data/config.ini` file. The new
+`redesk-data/config.ini` should contain `language=1` when saved, and the
+old `data/config.ini` should be unchanged. Then select Chinese in ReDesk,
+exit using the tray menu and restart: the selected language should persist.
+Restore English afterwards if preferred.
+
+No dependency cache reset, package rebuild, service install or NSIS
+installation is required. If you had already saved useful ReDesk credentials
+or settings to the legacy shared `data` directory, export or back those up
+first; this patch **does not silently copy sensitive identity files**.
