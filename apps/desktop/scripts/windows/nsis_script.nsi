@@ -11,6 +11,11 @@
 !define UNINSTALL_REG_KEY "ReDesk"
 !define PRODUCT_SERVICE_NAME "ReDeskService"
 
+; Can be overridden by pkg_x64.ps1 for an independent Non-Portable output.
+!ifndef REDESK_RELEASE_DIR
+  !define REDESK_RELEASE_DIR "..\..\..\..\build\windows\x64\release"
+!endif
+
 ; Installer icon path
 !define MUI_ICON "${__FILEDIR__}\..\..\resources\windows\crossdesk.ico"
 
@@ -111,21 +116,21 @@ installApp:
     SetOverwrite on
 
     ; Main application executable path
-    File /oname=ReDesk.exe "..\..\..\..\build\windows\x64\release\ReDesk.exe"
-    File "..\..\..\..\build\windows\x64\release\redesk_updater.exe"
+    File /oname=ReDesk.exe "${REDESK_RELEASE_DIR}\ReDesk.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_updater.exe"
     ; Bundle service-side binaries required by the Windows service flow
-    File "..\..\..\..\build\windows\x64\release\redesk_service.exe"
-    File "..\..\..\..\build\windows\x64\release\redesk_session_helper.exe"
-    File "..\..\..\..\build\windows\x64\release\redesk_privacy_cursor_helper.exe"
-    File "..\..\..\..\build\windows\x64\release\redesk_privacy_window.dll"
+    File "${REDESK_RELEASE_DIR}\redesk_service.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_session_helper.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_privacy_cursor_helper.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_privacy_window.dll"
     ; Require the Slint runtime so an incomplete build cannot be packaged.
-    File "..\..\..\..\build\windows\x64\release\slint_cpp.dll"
+    File "${REDESK_RELEASE_DIR}\slint_cpp.dll"
     ; Bundle the remaining runtime DLLs from the release output directory
-    File /x redesk_privacy_window.dll /x slint_cpp.dll "..\..\..\..\build\windows\x64\release\*.dll"
+    File /x redesk_privacy_window.dll /x slint_cpp.dll "${REDESK_RELEASE_DIR}\*.dll"
     ; Amyuni usbmmidd_v2 virtual display driver for headless hosts. xmake
     ; copies apps\desktop\resources\windows\usbmmidd_v2 into the release
     ; output directory after building redesk; its License.txt ships with it.
-    File /r "..\..\..\..\build\windows\x64\release\usbmmidd_v2"
+    File /r "${REDESK_RELEASE_DIR}\usbmmidd_v2"
 
     Call RegisterInstalledService
 

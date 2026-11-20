@@ -146,3 +146,45 @@ python scripts/check_windows_identity.py
 
 Windows NSIS compilation and elevated SCM/installer integration are **not yet
 verified**. Do not run the installer on a production machine as the first test.
+
+## Separate Non-Portable build, preserving Portable and shared package cache
+
+The normal developer command `scripts/build.ps1` uses the original checkout's
+Portable Xmake config and `build/windows/x64/release`. **Do not toggle**
+`--CROSSDESK_PORTABLE` in that working directory.
+
+To build a Windows installer, use:
+
+```powershell
+git pull --ff-only origin work/redesk-windows-identity-02
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1 -Version 1.7.6
+```
+
+The new script uses Xmake's official external work directory (`-P`) and
+separate build directory (`-o`). For checkout
+`C:\Users\Saeid\source\sbolhasani\CrossDesk-Upstream` the output paths are:
+
+- Xmake config: `CrossDesk-Upstream-installer-work` (sibling of checkout)
+- Non-Portable objects/binaries: `CrossDesk-Upstream-installer-build` (sibling)
+- Non-Portable release executables:
+  `CrossDesk-Upstream-installer-build\windows\x64\release\`
+- NSIS output: `apps\desktop\scripts\windows\redesk-win-x64-1.7.6.exe`
+
+Global Xmake installed packages/download cache are reused; the separate
+Non-Portable object files may need **one initial compilation** because compile
+flags and feature targets differ from Portable. Subsequent builds in the same
+external work directory are incremental. This is not a zero-rebuild guarantee.
+
+`scripts/build-installer.ps1 -BuildOnly` builds without packaging.
+`-Reconfigure` intentionally reconfigures *only* the external installer
+workdir (never the original Portable config), and is needed when changing
+the build version/options. Do not use `-c` to fix routine dependency errors.
+
+`pkg_x64.ps1 -ReleaseDirectory <absolute release folder>` accepts independent
+build outputs; `nsis_script.nsi` uses `REDESK_RELEASE_DIR` for its File
+instructions. The package script also locates NSIS in its default install path
+when `makensis.exe` is absent from PATH.
+
+**Do not install on the development host yet.** Test the produced installer
+in a throwaway Windows VM first, checking service registration, uninstall,
+and that an existing CrossDesk installation/configuration remain unchanged.

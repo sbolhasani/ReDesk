@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$Version
+  [string]$Version,
+  # Absolute output folder, e.g. CrossDesk-Upstream-installer-build\windows\x64\release.
+  [string]$ReleaseDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,7 +59,14 @@ $normalizedVersion = Normalize-AppVersion -InputVersion $Version
 $windowsVersion = Convert-To-WindowsVersion -InputVersion $normalizedVersion
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = (Resolve-Path (Join-Path $scriptDir "..\..\..\..")).Path
-$releaseDir = Join-Path $projectRoot "build\windows\x64\release"
+$releaseDir = if ([string]::IsNullOrWhiteSpace($ReleaseDirectory)) {
+  Join-Path $projectRoot "build\windows\x64\release"
+} elseif ([System.IO.Path]::IsPathRooted($ReleaseDirectory)) {
+  $ReleaseDirectory
+} else {
+  Join-Path $projectRoot $ReleaseDirectory
+}
+$releaseDir = [System.IO.Path]::GetFullPath($releaseDir)
 
 # Validate packaging inputs before invoking NSIS. A portable build deliberately
 # omits the updater and cannot be packaged as a non-portable installation.
@@ -108,7 +117,7 @@ Write-Host "NSIS compiler: $makensisPath"
 Write-Host "ReDesk release inputs: $releaseDir"
 Push-Location $scriptDir
 try {
-  & $makensisPath "/DVERSION=$normalizedVersion" "/DVERSION_NUMERIC=$windowsVersion" "nsis_script.nsi"
+  & $makensisPath "/DVERSION=$normalizedVersion" "/DVERSION_NUMERIC=$windowsVersion" "/DREDESK_RELEASE_DIR=$releaseDir" "nsis_script.nsi"
   if ($LASTEXITCODE -ne 0) {
     throw "NSIS packaging failed with exit code $LASTEXITCODE"
   }
