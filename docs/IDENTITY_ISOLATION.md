@@ -32,3 +32,20 @@ xmake r crossdesk
 Check fresh desktop startup and English language, open a second copy and verify it activates the first instance, verify tray behavior, and confirm that no service was installed or enabled. Do not reset the MiniRTC submodule or Xmake cache.
 
 The build/runtime validation of these changes has not yet been performed on the user's machine.
+
+## Re-activation repaint regression test (Windows)
+
+The first Windows test confirmed that the second ReDesk process correctly
+activates the first, but Slint occasionally paints only the custom titlebar
+close button until another minimize/maximize cycle. The desktop now schedules
+up to four redraw requests on event-loop ticks after the native HWND is shown
+and no longer minimized. A single full-client InvalidateRect on the first
+visible tick handles regions left dirty by the restore; no resizing,
+renderer restart, or blocking native paint calls are performed.
+
+With the first ReDesk instance minimized to the taskbar or hidden in the tray,
+launch the executable again. Check that it restores to the foreground and
+fully draws immediately. Repeat when the first instance is already visible,
+and when maximized. Also test minimizing and restoring normally. If this
+persists, compare hardware Slint rendering and `SLINT_BACKEND=winit-software`
+on the same machine to diagnose renderer-specific invalidation.
