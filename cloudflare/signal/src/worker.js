@@ -104,9 +104,18 @@ export class SignalHub {
   }
 
   socket(id) {
-    return this.ctx.getWebSockets().find(ws => ws.deserializeAttachment()?.user === id && ws.readyState === 1);
+    if (!validName(id)) return null;
+    // getWebSockets() returns sockets still associated with this Durable Object,
+    // including those restored after WebSocket hibernation. Some runtime/mock
+    // adapters don't expose readyState consistently on these server-side
+    // handles. The durable authenticated attachment, not a numeric state
+    // comparison, is the identity source of truth.
+    return this.ctx.getWebSockets().find(ws => {
+      const state = ws.deserializeAttachment();
+      return state?.phase === "authenticated" && state.user === id;
+    }) ?? null;
   }
-  online(id) { return Boolean(this.socket(id)); }
+  online(id) { return this.socket(id) !== null; }
   send(id, data) {
     const target = this.socket(id);
     return target ? safeSend(target, data) : false;
@@ -171,9 +180,22 @@ export class SignalHub {
     const user = state.user;
     if (msg.type === "recent_connections_presence") {
       const devices = Array.isArray(msg.devices) ? msg.devices.filter(validName).slice(0, 128) : [];
-      state.subscriptions = msg.subscribe === false ? [] : devices;
-      socket.serializeAttachment(state);
-      safeSend(socket, {type:"presence", devices:devices.map(id => ({id, online:this.online(id)}))});
+      // A one-shot probe must not erase long-lived presence subscriptions.
+      if (msg.subscribe !== false) {
+        state.subscriptions = devices;
+        socket.serializeAttachment(state);
+      }
+      const results = devices.map(id => ({id, online:this.online(id)}));
+      if (this.env?.DEBUG_PRESENCE === "1") {
+        // Never log IDs, passwords, device public keys or SDP.
+        console.info("redesk.presence", {
+          requested: results.length,
+          online: results.filter(x => x.online).length,
+          sockets: this.ctx.getWebSockets().length,
+          one_shot: msg.subscribe === false
+        });
+      }
+      safeSend(socket, {type:"presence", devices:results});
     } else if (msg.type === "join_transmission") {
       await this.join(socket, user, msg);
     } else if (msg.type === "user_leave_transmission") {
