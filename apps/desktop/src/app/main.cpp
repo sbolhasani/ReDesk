@@ -77,8 +77,8 @@ void EnsureConsoleForCli() {
 
 void PrintServiceCliUsage() {
   std::cout
-      << "CrossDesk service management commands\n"
-      << "  --service-install    Install the sibling crossdesk_service.exe\n"
+      << "ReDesk service management commands\n"
+      << "  --service-install    Install the sibling redesk_service.exe\n"
       << "  --service-repair     Update the service path and restart it\n"
       << "  --service-uninstall  Remove the installed Windows service\n"
       << "  --service-start      Start the Windows service\n"
@@ -97,7 +97,7 @@ void PrintServiceCliUsage() {
 }
 
 std::filesystem::path GetSiblingServiceExecutablePath() {
-  return crossdesk::platform::SiblingExecutablePath(L"crossdesk_service.exe");
+  return crossdesk::platform::SiblingExecutablePath(L"redesk_service.exe");
 }
 
 bool IsServiceCliCommand(const char* arg) {
@@ -169,7 +169,7 @@ int HandleServiceCliCommand(const std::string& command) {
   if (command == "--service-install" || command == "--service-repair") {
     std::filesystem::path service_path = GetSiblingServiceExecutablePath();
     if (service_path.empty()) {
-      std::cerr << "Failed to locate crossdesk_service.exe" << std::endl;
+      std::cerr << "Failed to locate redesk_service.exe" << std::endl;
       return 1;
     }
     if (!std::filesystem::exists(service_path)) {
@@ -307,12 +307,12 @@ static int RunApplication(int argc, char* argv[]) {
   // The headless supervisor owns the display and application lifetime. A
   // detached daemon would outlive its display; systemd can restart the whole
   // session instead.
-  if (std::getenv("CROSSDESK_HEADLESS_ACTIVE") ||
+  if (std::getenv("REDESK_HEADLESS_ACTIVE") ||
       crossdesk::HeadlessConsole::Instance().active()) enable_daemon = false;
 
   auto& runtime_daemon = crossdesk::platform::LinuxRuntimeDaemon::Instance();
   runtime_daemon.Initialize(
-      argc, argv, !std::getenv("CROSSDESK_HEADLESS_ACTIVE") &&
+      argc, argv, !std::getenv("REDESK_HEADLESS_ACTIVE") &&
                       !crossdesk::HeadlessConsole::Instance().active());
 #elif defined(_WIN32)
   auto& runtime_daemon = crossdesk::platform::WindowsRuntimeDaemon::Instance();
@@ -386,7 +386,7 @@ int main(int argc, char* argv[]) {
         !crossdesk::PrepareUnattendedDirectory(false))
       return 1;
     const std::string name(argv[2]);
-    if (name.rfind("Global\\CrossDeskUnattendedStop-", 0) != 0) return 1;
+    if (name.rfind("Global\\ReDeskUnattendedStop-", 0) != 0) return 1;
     const std::wstring wide_name(name.begin(), name.end());
     HANDLE stop = OpenEventW(SYNCHRONIZE, FALSE, wide_name.c_str());
     if (!stop) return 1;
@@ -410,7 +410,7 @@ int main(int argc, char* argv[]) {
                     std::strcmp(argv[1], "--autostart-uninstall") == 0)) {
     crossdesk::PathManager paths("ReDesk");
     crossdesk::InitLogger(paths.GetLogPath().string(),
-                          "crossdesk-autostart-cli");
+                          "redesk-autostart-cli");
     const bool success =
         std::strcmp(argv[1], "--autostart-migrate") == 0
             ? crossdesk::CleanupLegacyServiceAutostart()
@@ -431,7 +431,7 @@ int main(int argc, char* argv[]) {
         AcquireInstance(cli_instance, crossdesk::platform::InstanceRole::kServiceCli) !=
             crossdesk::platform::InstanceResult::kAcquired) return 1;
     crossdesk::PathManager paths("ReDesk");
-    crossdesk::InitLogger(paths.GetLogPath().string(), "crossdesk-service-cli");
+    crossdesk::InitLogger(paths.GetLogPath().string(), "redesk-service-cli");
     return HandleServiceCliCommand(argv[1]);
   }
 #endif

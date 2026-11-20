@@ -10,7 +10,7 @@
 namespace crossdesk {
 namespace {
 
-constexpr wchar_t kStreamAppId[] = L"CrossDesk.RemoteControl";
+constexpr wchar_t kStreamAppId[] = L"ReDesk.RemoteControl";
 constexpr UINT_PTR kTaskbarSubclassId = 1;
 
 void ClearTaskbarProperties(IPropertyStore* properties) {
