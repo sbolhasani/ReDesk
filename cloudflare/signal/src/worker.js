@@ -86,9 +86,10 @@ export class SignalHub {
       "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, public_key TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL)");
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS login_throttle (id TEXT PRIMARY KEY, failures INTEGER NOT NULL, locked_until INTEGER NOT NULL)");
-    // Room tickets and subscriptions are short-lived; websocket attachments
-    // make authenticated identity survive Durable Object hibernation.
-    this.rooms = new Map();
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, host TEXT NOT NULL, guest TEXT NOT NULL, created INTEGER NOT NULL)");
+    // Session authorization must survive DO hibernation. SQLite persists
+    // tickets; socket.serializeAttachment persists authenticated identity.
   }
 
   async fetch(request) {
@@ -255,7 +256,9 @@ export class SignalHub {
       roomFail("incorrect_password"); return;
     }
     const ticket = randomHex();
-    this.rooms.set(ticket,{host:target,guest:user,created:Date.now()});
+    this.ctx.storage.sql.exec(
+      "INSERT INTO sessions(token,host,guest,created) VALUES(?,?,?,?)",
+      ticket,target,user,now());
     const ice=iceSnapshot();
     // Host and viewer receive the same canonical transmission ID (without its
     // secret), plus the *other* endpoint's authenticated identity.
@@ -269,12 +272,10 @@ export class SignalHub {
     safeSend(socket,sessionTicket);
   }
   room(user,target,transmission) {
-    for (const [id,r] of this.rooms) {
-      if (Date.now()-r.created > 2*60*60*1000) {this.rooms.delete(id);continue;}
-      if (r.host === transmission &&
-          ((r.host===user && r.guest===target) || (r.host===target && r.guest===user))) return r;
-    }
-    return null;
+    this.ctx.storage.sql.exec("DELETE FROM sessions WHERE created<?", now()-7200);
+    return this.ctx.storage.sql.exec(
+      "SELECT token FROM sessions WHERE host=? AND ((host=? AND guest=?) OR (host=? AND guest=?)) LIMIT 1",
+      transmission,user,target,target,user).toArray()[0] ?? null;
   }
   relay(socket,user,msg) {
     const target=msg.remote_user_id,transmission=identifier(msg.transmission_id ?? "");
@@ -293,13 +294,13 @@ export class SignalHub {
   }
   leave(user,rawTarget) {
     const target=identifier(typeof rawTarget==="string" ? rawTarget : "");
-    for (const [id,r] of this.rooms) {
-      if (r.host===user || r.guest===user) {
-        if (target && r.host !== target) continue;
-        const other=r.host===user?r.guest:r.host;
-        this.send(other,{type:"user_leave_transmission",user_id:user,transmission_id:r.host});
-        this.rooms.delete(id);
-      }
+    const rows=this.ctx.storage.sql.exec(
+      "SELECT token,host,guest FROM sessions WHERE (host=? OR guest=?)",user,user).toArray();
+    for (const r of rows) {
+      if (target && r.host!==target) continue;
+      const other=r.host===user?r.guest:r.host;
+      this.send(other,{type:"user_leave_transmission",user_id:user,transmission_id:r.host});
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",r.token);
     }
   }
   webSocketClose(socket) { this.cleanup(socket); }
@@ -308,12 +309,12 @@ export class SignalHub {
     const state=socket.deserializeAttachment();
     if (state?.phase!=="authenticated") return;
     const id=state.user;
-    for (const [ticket,r] of this.rooms) {
-      if (r.host===id || r.guest===id) {
-        const other=r.host===id?r.guest:r.host;
-        this.send(other,{type:"user_leave_transmission",user_id:id,transmission_id:r.host});
-        this.rooms.delete(ticket);
-      }
+    const rows=this.ctx.storage.sql.exec(
+      "SELECT token,host,guest FROM sessions WHERE host=? OR guest=?",id,id).toArray();
+    for (const r of rows) {
+      const other=r.host===id?r.guest:r.host;
+      this.send(other,{type:"user_leave_transmission",user_id:id,transmission_id:r.host});
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",r.token);
     }
     if (!this.online(id)) this.updatePresence(id,false);
   }
