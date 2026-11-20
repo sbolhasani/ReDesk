@@ -101,7 +101,7 @@ class ConfigCenter {
   std::unique_ptr<IniStorage> ini_;
   const char* section_ = "Settings";
 
-  LANGUAGE language_ = LANGUAGE::SYSTEM;
+  LANGUAGE language_ = LANGUAGE::ENGLISH;
   CONNECTION_MODE connection_mode_ = CONNECTION_MODE::DEVICE_ID;
   bool enable_ip_direct_ = true;
   VIDEO_ENCODE_FORMAT video_encode_format_ = VIDEO_ENCODE_FORMAT::H264;

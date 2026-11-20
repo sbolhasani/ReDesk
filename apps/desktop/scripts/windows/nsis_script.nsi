@@ -33,7 +33,7 @@ RequestExecutionLevel admin
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchApp
 
 !insertmacro MUI_PAGE_FINISH
-!insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_RESERVEFILE_INSTALLOPTIONS
 ; ------ End of MUI Definition ------
 

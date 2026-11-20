@@ -2,6 +2,12 @@ set_project("crossdesk")
 set_xmakever("3.1.1")
 set_license("GPL-3.0-only")
 
+-- ReDesk's Windows-only recipe removes Apple-specific usrsctp patch fetches
+-- from cold builds. Installed packages remain in Xmake's shared package cache.
+if is_plat("windows") then
+    add_repositories("redesk-deps deps/xmake-repo")
+end
+
 local source_dir = os.getenv("CROSSDESK_SOURCE_DIR") or os.scriptdir()
 local desktop_platform = is_plat("windows", "macosx", "linux") or
     (not is_plat("iphoneos", "android", "harmony") and is_host("windows", "macosx", "linux"))
