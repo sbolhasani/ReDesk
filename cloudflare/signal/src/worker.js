@@ -87,6 +87,8 @@ export class SignalHub {
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS login_throttle (id TEXT PRIMARY KEY, failures INTEGER NOT NULL, locked_until INTEGER NOT NULL)");
     this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS join_throttle (id TEXT PRIMARY KEY, failures INTEGER NOT NULL, locked_until INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, host TEXT NOT NULL, guest TEXT NOT NULL, created INTEGER NOT NULL)");
     // Session authorization must survive DO hibernation. SQLite persists
     // tickets; socket.serializeAttachment persists authenticated identity.
@@ -135,6 +137,18 @@ export class SignalHub {
   }
   account(id) {
     return this.ctx.storage.sql.exec("SELECT id, public_key, salt, hash FROM devices WHERE id=?", id).toArray()[0];
+  }
+  joinThrottled(id) {
+    const row=this.ctx.storage.sql.exec("SELECT locked_until FROM join_throttle WHERE id=?",id).toArray()[0];
+    return Boolean(row && row.locked_until > now());
+  }
+  recordJoinFailure(id) {
+    const row=this.ctx.storage.sql.exec("SELECT failures,locked_until FROM join_throttle WHERE id=?",id).toArray()[0];
+    const count=(row?.locked_until>now()?row.failures:0)+1;
+    const until=count>=6?now()+300:0;
+    this.ctx.storage.sql.exec(
+      "INSERT INTO join_throttle(id,failures,locked_until) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until",
+      id,count,until);
   }
 
   async webSocketMessage(socket, data) {
@@ -252,9 +266,12 @@ export class SignalHub {
     if (!validName(target) || target === user) { roomFail("invalid_target"); return; }
     const account = this.account(target);
     if (!account || !this.online(target)) { roomFail("remote_unavailable"); return; }
+    if (this.joinThrottled(target)) { roomFail("rate_limited"); return; }
     if (!password || !ctEqual(account.hash,await passwordDigest(password,account.salt))) {
+      this.recordJoinFailure(target);
       roomFail("incorrect_password"); return;
     }
+    this.ctx.storage.sql.exec("DELETE FROM join_throttle WHERE id=?",target);
     const ticket = randomHex();
     this.ctx.storage.sql.exec(
       "INSERT INTO sessions(token,host,guest,created) VALUES(?,?,?,?)",
