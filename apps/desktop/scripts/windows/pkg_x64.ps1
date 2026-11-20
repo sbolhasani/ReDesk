@@ -56,12 +56,61 @@ function Convert-To-WindowsVersion {
 $normalizedVersion = Normalize-AppVersion -InputVersion $Version
 $windowsVersion = Convert-To-WindowsVersion -InputVersion $normalizedVersion
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = (Resolve-Path (Join-Path $scriptDir "..\..\..\..")).Path
+$releaseDir = Join-Path $projectRoot "build\windows\x64\release"
 
+# Validate packaging inputs before invoking NSIS. A portable build deliberately
+# omits the updater and cannot be packaged as a non-portable installation.
+$requiredFiles = @(
+  "ReDesk.exe",
+  "redesk_updater.exe",
+  "redesk_service.exe",
+  "redesk_session_helper.exe",
+  "redesk_privacy_cursor_helper.exe",
+  "redesk_privacy_window.dll",
+  "slint_cpp.dll"
+)
+$missingFiles = @(
+  foreach ($name in $requiredFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $releaseDir $name) -PathType Leaf)) {
+      $name
+    }
+  }
+)
+if (-not (Test-Path -LiteralPath (Join-Path $releaseDir "usbmmidd_v2") -PathType Container)) {
+  $missingFiles += "usbmmidd_v2 (directory)"
+}
+if ($missingFiles.Count -gt 0) {
+  throw ("Cannot package the ReDesk installer. Missing build outputs in {0}: {1}. " +
+    "If redesk_updater.exe is missing, the current Xmake configuration is probably Portable. " +
+    "Do not run xmake f -c on your working Portable build; use a separate Non-Portable configuration.") -f
+      $releaseDir, ($missingFiles -join ", ")
+}
+
+# NSIS may be installed but not in PATH (common with winget installs).
+$makensisCommand = Get-Command makensis.exe -ErrorAction SilentlyContinue
+$makensisPath = if ($makensisCommand) { $makensisCommand.Source } else { $null }
+if (-not $makensisPath) {
+  foreach ($parent in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+    if ([string]::IsNullOrWhiteSpace($parent)) { continue }
+    $candidate = Join-Path (Join-Path $parent "NSIS") "makensis.exe"
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      $makensisPath = $candidate
+      break
+    }
+  }
+}
+if (-not $makensisPath) {
+  throw "makensis.exe was not found in PATH, Program Files (x86)\\NSIS, or Program Files\\NSIS. Install NSIS or add its installation directory to PATH."
+}
+
+Write-Host "NSIS compiler: $makensisPath"
+Write-Host "ReDesk release inputs: $releaseDir"
 Push-Location $scriptDir
 try {
-  & makensis "/DVERSION=$normalizedVersion" "/DVERSION_NUMERIC=$windowsVersion" "nsis_script.nsi"
+  & $makensisPath "/DVERSION=$normalizedVersion" "/DVERSION_NUMERIC=$windowsVersion" "nsis_script.nsi"
   if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+    throw "NSIS packaging failed with exit code $LASTEXITCODE"
   }
 } finally {
   Pop-Location
