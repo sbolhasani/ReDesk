@@ -1,5 +1,10 @@
 ; Set search path
 !addincludedir "${__FILEDIR__}"
+;
+; nsProcess.dll is bundled with this repository, not with standard NSIS.
+; Register the local x86 Unicode plugin directory so _FindProcess and
+; _KillProcess work with a stock NSIS 3 installation (no global plugin copy).
+!addplugindir /x86-unicode "${__FILEDIR__}"
 
 ; Installer initial constants
 !define PRODUCT_NAME "ReDesk"

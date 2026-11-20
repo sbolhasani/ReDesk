@@ -96,6 +96,12 @@ if ($missingFiles.Count -gt 0) {
       $releaseDir, ($missingFiles -join ", ")
 }
 
+# nsProcess is bundled with this repository but is not a built-in NSIS plugin.
+$nsProcessPlugin = Join-Path $scriptDir "nsProcess.dll"
+if (-not (Test-Path -LiteralPath $nsProcessPlugin -PathType Leaf)) {
+  throw "Required bundled NSIS plugin is missing: $nsProcessPlugin"
+}
+
 # NSIS may be installed but not in PATH (common with winget installs).
 $makensisCommand = Get-Command makensis.exe -ErrorAction SilentlyContinue
 $makensisPath = if ($makensisCommand) { $makensisCommand.Source } else { $null }
