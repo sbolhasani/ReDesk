@@ -21,7 +21,7 @@ function fixture() {
   const sql={exec(query,...args) {
     const isLogin=query.includes("login_throttle");
     const throttle=isLogin?loginThrottle:joinThrottle;
-    if (query.startsWith("SELECT failures, locked_until")) {
+    if (/^SELECT failures,\s*locked_until FROM (login|join)_throttle WHERE id=\?$/.test(query)) {
       const row=throttle.get(args[0]);
       return {toArray:()=>row?[row]:[]};
     }
