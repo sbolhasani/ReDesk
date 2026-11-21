@@ -187,3 +187,35 @@ independent devices with the same Worker, successful authenticated login on
 both, accurate presence, password-authorized join and real ICE/P2P connection.
 A passing `/health` check proves the Worker is alive, **not** that login or
 P2P transport works.
+
+## Password mismatch and password rotation (2026-11-21)
+
+A live two-device test showed `kind: device, check: password_mismatch`.
+This confirms that the signed Ed25519 proof and existing registered
+public key match, but the six-character credential sent by the client
+does not match the Worker's verifier. Repeated reconnects will eventually
+cause a five-minute login lockout. Stop the failing client while inspecting
+its saved credential and any pending password-change record.
+
+The Worker now implements ReDesk's existing `change_password` message
+for a **previously authenticated primary device**. It validates the six
+alphanumeric characters, creates a fresh salted verifier in SQLite, and
+returns `type: change_password`, `request_id`, `user_id`, and
+`status: success` only after its storage update. The ReDesk client
+already stages the proposed new identity durably and promotes it only
+after receiving that acknowledgment.
+
+**This feature does not unlock an already failing device.** A device
+stuck at `password_mismatch` cannot use the authenticated change-password
+route. Do not accept key-only password rotation over the public WebSocket:
+it would weaken the two-factor device login design. Before attempting
+administrative recovery, safely back up its identity and credential-cache
+files. Investigate whether the client has a pending password change from
+an older version and whether the original saved password can still be
+restored. An explicit operator-authorized recovery facility, with
+appropriate access controls and audit logging, is a separate milestone.
+
+Use `npm run check`, then `npm run deploy` to enable the new handler.
+This Worker-only change requires no MiniRTC rebuild. Validate password
+rotation on a disposable, **already authenticated** test device first.
+Turn off `DEBUG_LOGIN` after collecting the necessary diagnosis.
