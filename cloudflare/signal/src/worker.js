@@ -17,6 +17,7 @@ const ID = /^\d{9}$/;
 const SESSION_ID = /^C-\d{9}$/;
 const HEX32 = /^[0-9a-f]{64}$/;
 const HEX64 = /^[0-9a-f]{128}$/;
+const DEVICE_PASSWORD = /^[A-Za-z0-9]{6}$/;
 const ROOM_FIELDS = new Set(["offer", "answer", "new_candidate", "new_candidate_mid"]);
 
 function hex(bytes) {
@@ -224,6 +225,8 @@ export class SignalHub {
       safeSend(socket, {type:"presence", devices:results});
     } else if (msg.type === "join_transmission") {
       await this.join(socket, user, msg);
+    } else if (msg.type === "change_password") {
+      await this.changePassword(socket, user, msg);
     } else if (msg.type === "user_leave_transmission") {
       this.leave(user, msg.transmission_id);
     } else if (msg.type === "disconnect_peer") {
@@ -333,6 +336,39 @@ export class SignalHub {
     // presence, which is based on the primary numeric-ID signaling socket.
     if (validName(assigned)) this.updatePresence(assigned,true);
     this.authLog("success", assigned);
+  }
+
+  async changePassword(socket, user, msg) {
+    // ReDesk first stages the new credential on disk, then sends this
+    // request over the already authenticated primary device socket.
+    // A temporary C- viewer MUST NOT be able to rotate its host's password.
+    const requestId = msg.request_id;
+    const reply = (status, reason) => {
+      const payload = {type:"change_password",status,user_id:user};
+      if (typeof requestId === "string") payload.request_id = requestId;
+      if (reason) payload.reason = reason;
+      safeSend(socket,payload);
+    };
+    if (!validName(user) || this.socket(user) !== socket) {
+      reply("failed", "not_authorized");
+      return;
+    }
+    if (typeof requestId !== "string" || requestId.length < 1 ||
+        requestId.length > 128 || /[\x00-\x1f\x7f]/.test(requestId) ||
+        !DEVICE_PASSWORD.test(msg.new_password)) {
+      reply("failed", "invalid_request");
+      return;
+    }
+    const account = this.account(user);
+    if (!account) { reply("failed", "unknown_id"); return; }
+    const salt = randomHex(16);
+    const hash = await passwordDigest(msg.new_password, salt);
+    // Another login may have replaced this WebSocket while digesting.
+    if (this.socket(user) !== socket) { reply("failed", "not_authorized"); return; }
+    this.ctx.storage.sql.exec(
+      "UPDATE devices SET salt=?, hash=? WHERE id=? AND public_key=?",
+      salt, hash, user, account.public_key);
+    reply("success");
   }
 
   async join(socket, user, msg) {
