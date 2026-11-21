@@ -32,13 +32,13 @@ function testHub(sockets) {
   return hub;
 }
 
-test("temporary C- viewer can be targeted by host SDP offer", () => {
+test("temporary C- viewer can be targeted by host SDP offer", async () => {
   const host = new Socket("123456789");
   const viewer = new Socket("C-987654321");
   const hub = testHub([host,viewer]);
   assert.equal(hub.socket("C-987654321"), viewer);
   assert.equal(hub.online("C-987654321"), false); // transient peer is not a host
-  hub.relay(host,"123456789",{
+  await hub.relay(host,"123456789",{
     type:"offer",transmission_id:"123456789",
     remote_user_id:"C-987654321",user_id:"forged",
     sdp:"v=0\r\n"
@@ -59,11 +59,11 @@ test("temporary C- viewer can be targeted by host SDP offer", () => {
   assert.deepEqual(offer.ice.servers,[{urls:["stun:stun.cloudflare.com:3478"]}]);
 });
 
-test("temporary C- viewer can answer to its numeric target host", () => {
+test("temporary C- viewer can answer to its numeric target host", async () => {
   const host = new Socket("123456789");
   const viewer = new Socket("C-987654321");
   const hub = testHub([host,viewer]);
-  hub.relay(viewer,"C-987654321",{
+  await hub.relay(viewer,"C-987654321",{
     type:"answer",transmission_id:"123456789",
     remote_user_id:"123456789",user_id:"forged",sdp:"v=0\r\n"
   });
