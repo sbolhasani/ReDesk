@@ -9,6 +9,7 @@
 
 const MAX_MESSAGE = 64 * 1024;
 const CHALLENGE_MS = 30_000;
+const SIGNATURE_CHALLENGE_MS = 10_000; // CrossDesk single-use proof deadline.
 const MAX_CONNECTIONS = 200; // Single hub is for initial testing, not scaling.
 const ICE_LIFETIME = 1800;
 const ID = /^\d{9}$/;
@@ -29,9 +30,17 @@ function unhex(s) {
 function randomHex(n = 32) {
   return hex(crypto.getRandomValues(new Uint8Array(n)));
 }
-function randomDigits(n) {
-  const bytes = crypto.getRandomValues(new Uint8Array(n));
-  return [...bytes].map(n => n % 10).join("");
+function randomPassword() {
+  // Match CrossDesk's six-character alphanumeric rejection sampling.
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  let value = "";
+  while (value.length < 6) {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    for (const byte of bytes) {
+      if (byte < 248 && value.length < 6) value += alphabet[byte % 62];
+    }
+  }
+  return value;
 }
 function now() { return Math.floor(Date.now() / 1000); }
 function validName(s) { return typeof s === "string" && ID.test(s); }
@@ -253,14 +262,13 @@ export class SignalHub {
       const id = identifier(msg.user_id);
       if (id !== "" && !validPeerName(id)) { this.denyLogin(socket,id,"invalid_id"); return; }
       const parent = ownerId(id);
-      // Viewer sessions use a separate login-throttle namespace. A failing
-      // temporary session must not lock the registered host's primary login.
-      if (id && this.throttled(id)) { this.denyLogin(socket,id,"rate_limited"); return; }
+      // CrossDesk: signed login for a key-bound ID is NOT a password attempt.
+      // Existing password-failure counters must never lock a valid device.
       const account = parent ? this.account(parent) : null;
       if (parent && !account) { this.denyLogin(socket,id,"unknown_id"); return; }
-      // C- sessions authenticate with their owner's Ed25519 key, not a
-      // reusable password. Never create a new device record for C- IDs.
-      const passwordRequired = Boolean(account) && !SESSION_ID.test(id);
+      // All IDs issued by this Worker have a bound key. Upstream only asks
+      // for a password when binding a legacy, unbound device for the first time.
+      const passwordRequired = false;
       const nonce = randomHex();
       socket.serializeAttachment({phase:"challenge",at:Date.now(),user:null,id,
         key:msg.device_key.public_key,nonce, passwordRequired});
@@ -269,16 +277,18 @@ export class SignalHub {
       this.authLog("challenge", id);
       return;
     }
-    if (state.phase !== "challenge" || Date.now() - state.at > CHALLENGE_MS) {
+    if (state.phase !== "challenge" || Date.now() - state.at > SIGNATURE_CHALLENGE_MS) {
       this.denyLogin(socket,state.id ?? "","invalid_login_state"); return;
     }
+    // Consume a challenge before awaiting verification; prevent replay/races.
+    socket.serializeAttachment({...state,phase:"verifying"});
     const id = state.id;
     const presented = typeof msg.user_id === "string" ? msg.user_id : "";
     const password = presented.includes("@") ? presented.slice(presented.indexOf("@") + 1) : "";
     if (identifier(presented) !== id || !msg.device_key ||
         msg.device_key.public_key !== state.key || msg.device_key.nonce !== state.nonce ||
         !(await verifyProof(state.key, id, state.nonce, msg.device_key.signature))) {
-      this.failure(id); this.denyLogin(socket,id,"invalid_proof");
+      this.denyLogin(socket,id,"invalid_proof");
       socket.close(1008,"Authentication failed"); return;
     }
     let assigned = id;
@@ -292,22 +302,20 @@ export class SignalHub {
         row.public_key !== state.key ? "device_key_mismatch" :
         (password || presented.includes("@")) ? "unexpected_password" : "";
       if (check) {
-        this.failure(id); this.denyLogin(socket,id,"invalid_credentials",check);
+        this.denyLogin(socket,id,"invalid_credentials",check);
         socket.close(1008,"Authentication failed"); return;
       }
-      this.clearFailure(id);
     } else if (id) {
       const row = this.account(id);
+      // CrossDesk LoginWithKey only requires the bound key's signature.
+      // The connection password is separately verified at Join.
       const check = !row ? "account_missing" :
         row.public_key !== state.key ? "device_key_mismatch" :
-        !password ? "missing_password" :
-        !ctEqual(row.hash, await passwordDigest(password, row.salt))
-          ? "password_mismatch" : "";
+        presented.includes("@") ? "unexpected_password" : "";
       if (check) {
-        this.failure(id); this.denyLogin(socket,id,"invalid_credentials",check);
+        this.denyLogin(socket,id,"invalid_credentials",check);
         socket.close(1008,"Authentication failed"); return;
       }
-      this.clearFailure(id);
     } else {
       // A new ID is allocated only after proof of the client's private key.
       for (let i=0; i<25; i++) {
@@ -315,7 +323,7 @@ export class SignalHub {
         if (!this.account(candidate)) { assigned = candidate; break; }
       }
       if (!assigned) { this.denyLogin(socket,id,"capacity"); return; }
-      initialPassword = randomDigits(6);
+      initialPassword = randomPassword();
       const salt = randomHex(16);
       const hash = await passwordDigest(initialPassword, salt);
       this.ctx.storage.sql.exec("INSERT INTO devices(id,public_key,salt,hash) VALUES(?,?,?,?)",
