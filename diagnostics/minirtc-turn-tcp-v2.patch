@@ -193,7 +193,7 @@ diff --git a/src/ice/ice_server_resolver.h b/src/ice/ice_server_resolver.h
      if (inserted) {
        host->second = ResolveTurnServerAddresses(server.host);
        size_t ipv4 = 0, ipv6 = 0;
-@@ -88,16 +106,23 @@
+@@ -88,15 +106,22 @@
         ++address) {
      for (const auto* endpoint : endpoints) {
        const auto& addresses = hosts.at(endpoint->host);
@@ -222,4 +222,3 @@ diff --git a/src/ice/ice_server_resolver.h b/src/ice/ice_server_resolver.h
 +
 +}  // namespace minirtc
  #endif
- 
