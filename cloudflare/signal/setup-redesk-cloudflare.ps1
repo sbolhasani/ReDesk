@@ -11,6 +11,7 @@ param(
     [ValidateSet("Auto","Install","Update","Check")] [string]$Mode="Auto",
     [string]$AccountId="",
     [switch]$AdoptExistingWorker,
+    [ValidateSet("Auto","Wrangler","Token")] [string]$DeployAuth="Auto",
     [string]$WorkerUrl=""
 )
 $ErrorActionPreference="Stop"
@@ -21,6 +22,11 @@ $api="https://api.cloudflare.com/client/v4"
 $stateDir=Join-Path $env:LOCALAPPDATA "ReDesk\Cloudflare"
 $apiToken=$null
 $turnSecret=$null
+# Save inherited environment variables and restore them when setup exits.
+$oldCloudToken=$env:CLOUDFLARE_API_TOKEN
+$oldCloudAccount=$env:CLOUDFLARE_ACCOUNT_ID
+$oldCloudKey=$env:CLOUDFLARE_API_KEY
+$oldCloudEmail=$env:CLOUDFLARE_EMAIL
 
 function Read-Private([string]$prompt) {
     $sec=Read-Host $prompt -AsSecureString
@@ -50,11 +56,60 @@ function Health([string]$url) {
     Write-Host "Worker health OK; TURN configured: $($reply.turn_configured)" -ForegroundColor Green
     return $base
 }
+
+function Run-Wrangler([string[]]$CommandArgs, [string]$StdIn="") {
+    # PS5.1 turns native stderr into an ErrorRecord under 2>&1.
+    # Do not treat that as a PowerShell terminating error; inspect exit code.
+    $oldPreference=$ErrorActionPreference
+    try {
+        $ErrorActionPreference="Continue"
+        if ($StdIn) { $lines=@($StdIn | & npx --no-install wrangler @CommandArgs 2>&1) }
+        else { $lines=@(& npx --no-install wrangler @CommandArgs 2>&1) }
+        $code=$LASTEXITCODE
+    } finally { $ErrorActionPreference=$oldPreference }
+    return [pscustomobject]@{
+        Code=[int]$code
+        Lines=@($lines | ForEach-Object { [string]$_ })
+    }
+}
+function Explain-WranglerError($result) {
+    # Display provider error codes and permission details without credentials.
+    $msg=($result.Lines | Select-Object -Last 25) -join [Environment]::NewLine
+    foreach ($secret in @($apiToken, $turnSecret)) {
+        if (-not [string]::IsNullOrEmpty($secret)) { $msg=$msg.Replace($secret,"[redacted]") }
+    }
+    $msg=[regex]::Replace($msg,'(?i)Bearer\s+[A-Za-z0-9._~-]+','Bearer [redacted]')
+    if ($msg) { Write-Host $msg }
+}
+function Resolve-DeployAuth([string]$Choice,[string]$Account) {
+    if ($Choice -eq "Token") { return "Token" }
+    # Probe the local OAuth login, ignoring a separate Calls TURN API token.
+    Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue
+    Remove-Item Env:CLOUDFLARE_API_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:CLOUDFLARE_EMAIL -ErrorAction SilentlyContinue
+    try { $probe=Run-Wrangler @("whoami") }
+    finally {
+        if ($null -ne $oldCloudToken) { $env:CLOUDFLARE_API_TOKEN=$oldCloudToken }
+        if ($null -ne $oldCloudKey) { $env:CLOUDFLARE_API_KEY=$oldCloudKey }
+        if ($null -ne $oldCloudEmail) { $env:CLOUDFLARE_EMAIL=$oldCloudEmail }
+    }
+    $output=$probe.Lines -join " "
+    if ($probe.Code -eq 0 -and $output -match "OAuth Token" -and
+        $output.Contains($Account)) { return "Wrangler" }
+    if ($Choice -eq "Wrangler") {
+        throw "No Wrangler OAuth login matching this Account ID. Run 'npx wrangler login' and check 'npx wrangler whoami'."
+    }
+    return "Token"
+}
+
 function WorkerSecret([string]$name,[string]$value) {
     if (-not $value) { throw "Refusing to put an empty secret." }
     # Passing via stdin avoids placing credentials in command line args.
-    $value | & npx --no-install wrangler secret put $name 1>$null
-    if ($LASTEXITCODE -ne 0) { throw "Wrangler could not configure $name." }
+    $result=Run-Wrangler @("secret","put",$name) $value
+    if ($result.Code -ne 0) {
+        Explain-WranglerError $result
+        throw "Wrangler could not configure $name (exit $($result.Code))."
+    }
 }
 function Test-Turn([string]$id,[string]$secret) {
     $endpoint="https://rtc.live.cloudflare.com/v1/turn/keys/$id/credentials/generate-ice-servers"
@@ -123,12 +178,24 @@ try {
             & npm install --no-audit --no-fund
             if($LASTEXITCODE -ne 0){throw "npm install failed."}
         }
-        $env:CLOUDFLARE_API_TOKEN=$apiToken
+        $auth=Resolve-DeployAuth $DeployAuth $AccountId
         $env:CLOUDFLARE_ACCOUNT_ID=$AccountId
+        if($auth -eq "Wrangler") {
+            Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue
+            Remove-Item Env:CLOUDFLARE_API_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:CLOUDFLARE_EMAIL -ErrorAction SilentlyContinue
+            Write-Host "Deploy authentication: existing Wrangler OAuth login."
+        } else {
+            $env:CLOUDFLARE_API_TOKEN=$apiToken
+            Write-Host "Deploy authentication: scoped API Token."
+        }
         Write-Host "Deploying Worker and Durable Object migration (without deleting existing data)..."
-        $out= & npx --no-install wrangler deploy 2>&1
-        if($LASTEXITCODE -ne 0){throw "wrangler deploy failed; inspect Cloudflare project and token permissions."}
-        $match=[regex]::Match(($out | Out-String),'https://[a-zA-Z0-9.-]+\.workers\.dev')
+        $deployment=Run-Wrangler @("deploy")
+        if ($deployment.Code -ne 0) {
+            Explain-WranglerError $deployment
+            throw "wrangler deploy failed. The token may lack Workers Scripts Edit or Account Settings Read. Try -DeployAuth Wrangler if you have already run wrangler login."
+        }
+        $match=[regex]::Match(($deployment.Lines -join [Environment]::NewLine),'https://[a-zA-Z0-9.-]+\.workers\.dev')
         $url=if($WorkerUrl){$WorkerUrl}elseif($match.Success){$match.Value}elseif($state){$state.worker_url}else{""}
         $turnId=if($state){$state.turn_key_id}else{""}
         if ($Mode -eq "Install" -and -not $turnId) {
@@ -162,6 +229,12 @@ try {
 } finally {
     $apiToken=$null
     $turnSecret=$null
-    Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue
-    Remove-Item Env:CLOUDFLARE_ACCOUNT_ID -ErrorAction SilentlyContinue
+    if ($null -ne $oldCloudToken) { $env:CLOUDFLARE_API_TOKEN=$oldCloudToken }
+    else { Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue }
+    if ($null -ne $oldCloudAccount) { $env:CLOUDFLARE_ACCOUNT_ID=$oldCloudAccount }
+    else { Remove-Item Env:CLOUDFLARE_ACCOUNT_ID -ErrorAction SilentlyContinue }
+    if ($null -ne $oldCloudKey) { $env:CLOUDFLARE_API_KEY=$oldCloudKey }
+    else { Remove-Item Env:CLOUDFLARE_API_KEY -ErrorAction SilentlyContinue }
+    if ($null -ne $oldCloudEmail) { $env:CLOUDFLARE_EMAIL=$oldCloudEmail }
+    else { Remove-Item Env:CLOUDFLARE_EMAIL -ErrorAction SilentlyContinue }
 }
