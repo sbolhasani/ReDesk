@@ -68,29 +68,33 @@ async function prove(hub,socket,id,key,challenge,password="") {
   await hub.login(socket,socket.state,{type:"login",user_id:password?id+"@"+password:id,
     device_key:{version:1,public_key:key.publicKey,nonce:challenge.nonce,signature}});
 }
-test("six sequential wrong passwords lock numeric login; later successful login clears failures",async()=>{
-  const f=fixture(), key=await keyPair(), id="123456789", password="123456";
+test("CrossDesk signed login ignores stale device password and old device-ID lock",async()=>{
+  const f=fixture(), key=await keyPair(), id="123456789";
   const salt="aa";
-  const hash=hex(await crypto.subtle.digest("SHA-256",encode.encode(salt+":"+password)));
+  const hash=hex(await crypto.subtle.digest("SHA-256",encode.encode(salt+":old123")));
   f.records.set(id,{id,public_key:key.publicKey,salt,hash});
-  for(let count=1;count<=6;count++) {
-    const socket=new Socket();f.sockets.push(socket);
-    const nonce=await challenge(f.hub,socket,id,key.publicKey);
-    await prove(f.hub,socket,id,key,nonce,"000000");
-    assert.equal(socket.messages.at(-1).reason,"invalid_credentials");
-    assert.equal(f.loginThrottle.get(id).failures,count);
-  }
-  assert.ok(f.loginThrottle.get(id).locked_until>=seconds()+295);
-  const blocked=new Socket();f.sockets.push(blocked);
-  await f.hub.login(blocked,blocked.state,{type:"login",user_id:id,
-    device_key:{version:1,public_key:key.publicKey}});
-  assert.equal(blocked.messages.at(-1).reason,"rate_limited");
-  f.loginThrottle.set(id,{failures:6,locked_until:seconds()-1});
-  const recovered=new Socket();f.sockets.push(recovered);
-  const nonce=await challenge(f.hub,recovered,id,key.publicKey);
-  await prove(f.hub,recovered,id,key,nonce,password);
-  assert.equal(recovered.messages.at(-1).status,"success");
-  assert.equal(f.loginThrottle.has(id),false);
+  // A lock from the older Worker must not block the new signed login.
+  f.loginThrottle.set(id,{failures:6,locked_until:seconds()+300});
+  const primary=new Socket();f.sockets.push(primary);
+  const nonce=await challenge(f.hub,primary,id,key.publicKey);
+  assert.equal(nonce.password_required,false);
+  await prove(f.hub,primary,id,key,nonce);
+  assert.equal(primary.messages.at(-1).status,"success");
+  assert.equal(primary.messages.at(-1).user_id,id);
+  assert.equal(f.loginThrottle.get(id).failures,6);
+});
+test("signed challenge is consumed and a replay cannot log in",async()=>{
+  const f=fixture(), key=await keyPair(), id="123456789";
+  f.records.set(id,{id,public_key:key.publicKey,salt:"aa",hash:"00"});
+  const primary=new Socket();f.sockets.push(primary);
+  const nonce=await challenge(f.hub,primary,id,key.publicKey);
+  const transcript=JSON.stringify(["crossdesk.device-login.v1",id,key.publicKey,nonce.nonce]);
+  const signature=hex(await crypto.subtle.sign("Ed25519",key.pair.privateKey,encode.encode(transcript)));
+  const response={type:"login",user_id:id,device_key:{version:1,public_key:key.publicKey,nonce:nonce.nonce,signature}};
+  await f.hub.login(primary,primary.state,response);
+  assert.equal(primary.messages.at(-1).status,"success");
+  await f.hub.login(primary,primary.state,response);
+  assert.equal(primary.messages.at(-1).reason,"already_logged_in");
 });
 test("join failures accumulate, lock and reset after expiration",()=>{
   const f=fixture(), id="123456789";
@@ -116,15 +120,15 @@ test("diagnostic classification never sends credential details to a client",asyn
     f.hub.env.DEBUG_LOGIN="1";
     const wrongKey=new Socket();f.sockets.push(wrongKey);
     const nonce=await challenge(f.hub,wrongKey,id,other.publicKey);
-    await prove(f.hub,wrongKey,id,other,nonce,"654321");
+    await prove(f.hub,wrongKey,id,other,nonce);
     assert.equal(warnings.at(-1)[1].check,"device_key_mismatch");
     assert.equal(wrongKey.messages.at(-1).reason,"invalid_credentials");
     assert.equal(wrongKey.messages.at(-1).check,undefined);
-    const wrongPassword=new Socket();f.sockets.push(wrongPassword);
-    const nonce2=await challenge(f.hub,wrongPassword,id,key.publicKey);
-    await prove(f.hub,wrongPassword,id,key,nonce2,"111111");
-    assert.equal(warnings.at(-1)[1].check,"password_mismatch");
-    assert.equal(wrongPassword.messages.at(-1).check,undefined);
+    const unexpectedPassword=new Socket();f.sockets.push(unexpectedPassword);
+    const nonce2=await challenge(f.hub,unexpectedPassword,id,key.publicKey);
+    await prove(f.hub,unexpectedPassword,id,key,nonce2,"111111");
+    assert.equal(warnings.at(-1)[1].check,"unexpected_password");
+    assert.equal(unexpectedPassword.messages.at(-1).check,undefined);
     assert.ok(!JSON.stringify(warnings).includes(key.publicKey));
     assert.ok(!JSON.stringify(warnings).includes("111111"));
   } finally {console.warn=oldWarn;}
