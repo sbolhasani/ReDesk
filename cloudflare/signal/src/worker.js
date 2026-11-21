@@ -437,9 +437,15 @@ export class SignalHub {
           !["sdp","candidate"].some(k=>typeof msg[k]==="string" && msg[k].length<4096))) {
       reject(socket,"invalid_signal");return;
     }
-    // Never trust sender-supplied user_id; recipients should see the
-    // authenticated sender as their remote peer.
-    this.send(target,{...msg,user_id:user,remote_user_id:user,transmission_id:transmission});
+    // Match CrossDesk SignalNegotiation::offer: the answerer needs a fresh
+    // per-connection ICE snapshot in the offer. MiniRTC's BuildConnectionInfo
+    // rejects offers without "ice" after login advertises ice_config_version:1.
+    // The host received its separate snapshot in user_join_transmission.
+    // Do not trust sender-provided ICE/server credentials or sender identity.
+    const routed = {...msg,user_id:user,remote_user_id:user,transmission_id:transmission};
+    if (msg.type === "offer") routed.ice = iceSnapshot();
+    else delete routed.ice;
+    this.send(target,routed);
   }
   leave(user,rawTarget) {
     const target=identifier(typeof rawTarget==="string" ? rawTarget : "");
