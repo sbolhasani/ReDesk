@@ -34,16 +34,14 @@ $oldCloudEmail=$env:CLOUDFLARE_EMAIL
 # Account-owned tokens accept exact permission-group IDs, unlike user tokens.
 # The documented group IDs can be resolved in Cloudflare's permission-groups API.
 function Get-TokenTemplateUrl([string]$Purpose) {
-    # Calls Write, Workers Scripts Write, Account Settings Read.
-    # IDs are Cloudflare permission group IDs; account-token URLs accept IDs.
-    $callsWrite="b711942448db4b0aace44d1312f9fdb0"
-    $workersWrite="e086da7e2179491d91ee5f35b3ca210a"
-    $accountRead="c1fde68c7bcc44588cbb6ddbc16d6480"
-    $perms=@(@{key=$callsWrite;type="edit"})
+    # Use the documented *symbolic* permission keys, never guessed IDs.
+    # Cloudflare may reject an unrecognized Calls key in the browser and show
+    # a notice; verify it before clicking Create.
+    $perms=@(@{key="calls";type="edit"})
     $name="ReDesk TURN Setup"
     if ($Purpose -eq "Full") {
-        $perms+=@{key=$workersWrite;type="edit"}
-        $perms+=@{key=$accountRead;type="read"}
+        $perms+=@{key="workers_scripts";type="edit"}
+        $perms+=@{key="account_settings";type="read"}
         $name="ReDesk Backend Setup"
     }
     $json=ConvertTo-Json -InputObject @($perms) -Depth 4 -Compress
@@ -59,7 +57,7 @@ function Open-TokenTemplate([string]$Purpose) {
     } else {
         Write-Host "Required permissions: Account / Calls / Write, Workers Scripts / Write, Account Settings / Read."
     }
-    Write-Host "Review the preselected permissions and account in Cloudflare before creating."
+    Write-Host "Confirm that Calls / Write really appears; if Cloudflare warns that Calls is unresolved, select Account > Calls > Write manually. Do not create an incomplete token."
     Write-Host "Cloudflare must still show the token once; copy it privately into this setup tool."
     Write-Host $url
     try { Start-Process -FilePath $url -ErrorAction Stop | Out-Null }
@@ -100,9 +98,45 @@ function Cf([string]$method,[string]$path,$body=$null) {
         $args.ContentType="application/json"
         $args.Body=($body|ConvertTo-Json -Compress -Depth 5)
     }
-    try { $response=Invoke-RestMethod @args }
-    catch { throw "Cloudflare API call failed ($method $path): check token rights and account availability." }
-    if (-not $response.success) { throw "Cloudflare API rejected $method $path." }
+    try {
+        $response=Invoke-RestMethod @args
+    } catch {
+        $status="unknown"
+        if ($_.Exception.Response) {
+            try { $status=[int]$_.Exception.Response.StatusCode } catch {}
+        }
+        # API error bodies may contain diagnostic details. Retain only the
+        # provider's numeric code and short message, never raw headers/tokens.
+        $details=""
+        try {
+            $stream=$_.Exception.Response.GetResponseStream()
+            if($stream) {
+                $reader=New-Object System.IO.StreamReader($stream)
+                $raw=$reader.ReadToEnd()
+                $data=ConvertFrom-Json -InputObject $raw -ErrorAction Stop
+                $items=@($data.errors | Select-Object -First 3)
+                $details=($items | ForEach-Object {
+                    $code=if($_.code -match '^\d+$'){$_.code}else{"unknown"}
+                    $msg=[string]$_.message
+                    foreach($secret in @($apiToken,$turnSecret)){
+                        if($secret){$msg=$msg.Replace($secret,"[redacted]")}
+                    }
+                    if($msg.Length -gt 240){$msg=$msg.Substring(0,240)}
+                    "[$code] $msg"
+                }) -join "; "
+            }
+        } catch {}
+        throw "Cloudflare API failed: HTTP $status, $method $path. $details"
+    }
+    if (-not $response.success) {
+        $details=(@($response.errors | Select-Object -First 3) | ForEach-Object {
+            "[$($_.code)] $($_.message)"
+        }) -join "; "
+        foreach($secret in @($apiToken,$turnSecret)){
+            if($secret){$details=$details.Replace($secret,"[redacted]")}
+        }
+        throw "Cloudflare API rejected $method $path. $details"
+    }
     return $response.result
 }
 function Health([string]$url) {
