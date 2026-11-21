@@ -149,6 +149,20 @@ export class SignalHub {
   clearFailure(id) {
     this.ctx.storage.sql.exec("DELETE FROM login_throttle WHERE id=?", id);
   }
+  // Diagnostics report only a peer category and a protocol reason; never log
+  // device identifiers, credentials, Ed25519 keys, SDP or ICE candidates.
+  authLog(event, id, reason = "") {
+    if (event !== "rejected" && this.env?.DEBUG_LOGIN !== "1") return;
+    const kind = !id ? "new" : SESSION_ID.test(id) ? "viewer" :
+      validName(id) ? "device" : "invalid";
+    const detail = {event, kind, reason};
+    if (event === "rejected") console.warn("redesk.auth", detail);
+    else console.info("redesk.auth", detail);
+  }
+  denyLogin(socket, id, reason) {
+    this.authLog("rejected", id, reason);
+    reject(socket, reason, "login");
+  }
   account(id) {
     return this.ctx.storage.sql.exec("SELECT id, public_key, salt, hash FROM devices WHERE id=?", id).toArray()[0];
   }
@@ -224,14 +238,16 @@ export class SignalHub {
       if (typeof msg.user_id !== "string" || msg.user_id.length > 32 ||
           !msg.device_key || msg.device_key.version !== 1 ||
           !HEX32.test(msg.device_key.public_key)) {
-        reject(socket,"invalid_login"); return;
+        this.denyLogin(socket, "", "invalid_login"); return;
       }
       const id = identifier(msg.user_id);
-      if (id !== "" && !validPeerName(id)) { reject(socket,"invalid_id"); return; }
+      if (id !== "" && !validPeerName(id)) { this.denyLogin(socket,id,"invalid_id"); return; }
       const parent = ownerId(id);
-      if (parent && this.throttled(parent)) { reject(socket,"rate_limited"); return; }
+      // Viewer sessions use a separate login-throttle namespace. A failing
+      // temporary session must not lock the registered host's primary login.
+      if (id && this.throttled(id)) { this.denyLogin(socket,id,"rate_limited"); return; }
       const account = parent ? this.account(parent) : null;
-      if (parent && !account) { reject(socket,"unknown_id"); return; }
+      if (parent && !account) { this.denyLogin(socket,id,"unknown_id"); return; }
       // C- sessions authenticate with their owner's Ed25519 key, not a
       // reusable password. Never create a new device record for C- IDs.
       const passwordRequired = Boolean(account) && !SESSION_ID.test(id);
@@ -240,10 +256,11 @@ export class SignalHub {
         key:msg.device_key.public_key,nonce, passwordRequired});
       safeSend(socket, {type:"login_challenge",user_id:id,nonce,device_key_version:1,
         password_required:passwordRequired});
+      this.authLog("challenge", id);
       return;
     }
     if (state.phase !== "challenge" || Date.now() - state.at > CHALLENGE_MS) {
-      reject(socket,"invalid_login_state"); return;
+      this.denyLogin(socket,state.id ?? "","invalid_login_state"); return;
     }
     const id = state.id;
     const presented = typeof msg.user_id === "string" ? msg.user_id : "";
@@ -251,7 +268,8 @@ export class SignalHub {
     if (identifier(presented) !== id || !msg.device_key ||
         msg.device_key.public_key !== state.key || msg.device_key.nonce !== state.nonce ||
         !(await verifyProof(state.key, id, state.nonce, msg.device_key.signature))) {
-      this.failure(ownerId(id)); reject(socket,"invalid_proof", "login"); socket.close(1008,"Authentication failed"); return;
+      this.failure(id); this.denyLogin(socket,id,"invalid_proof");
+      socket.close(1008,"Authentication failed"); return;
     }
     let assigned = id;
     let initialPassword = null;
@@ -261,15 +279,16 @@ export class SignalHub {
       const parent = ownerId(id);
       const row = this.account(parent);
       if (!row || row.public_key !== state.key || password || presented.includes("@")) {
-        this.failure(parent); reject(socket,"invalid_credentials","login");
+        this.failure(id); this.denyLogin(socket,id,"invalid_credentials");
         socket.close(1008,"Authentication failed"); return;
       }
-      this.clearFailure(parent);
+      this.clearFailure(id);
     } else if (id) {
       const row = this.account(id);
       if (!row || row.public_key !== state.key ||
           !ctEqual(row.hash, await passwordDigest(password, row.salt))) {
-        this.failure(id); reject(socket,"invalid_credentials","login"); socket.close(1008,"Authentication failed"); return;
+        this.failure(id); this.denyLogin(socket,id,"invalid_credentials");
+        socket.close(1008,"Authentication failed"); return;
       }
       this.clearFailure(id);
     } else {
@@ -278,7 +297,7 @@ export class SignalHub {
         const candidate = String(100000000 + Math.floor(crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296 * 900000000));
         if (!this.account(candidate)) { assigned = candidate; break; }
       }
-      if (!assigned) { reject(socket,"capacity","login"); return; }
+      if (!assigned) { this.denyLogin(socket,id,"capacity"); return; }
       initialPassword = randomDigits(6);
       const salt = randomHex(16);
       const hash = await passwordDigest(initialPassword, salt);
@@ -288,7 +307,10 @@ export class SignalHub {
 
     // Close an older connection to keep one authoritative peer per ID.
     const prior = this.socket(assigned);
-    if (prior && prior !== socket) prior.close(4001,"New login");
+    if (prior && prior !== socket) {
+      this.authLog("replaced_existing_socket", assigned);
+      prior.close(4001,"New login");
+    }
     socket.serializeAttachment({phase:"authenticated",at:Date.now(),user:assigned,subscriptions:[]});
     safeSend(socket,{type:"login",status:"success",
       user_id:initialPassword ? assigned+"@"+initialPassword : assigned,
@@ -296,6 +318,7 @@ export class SignalHub {
     // Viewer C- sessions are ephemeral and must not alter the owner's
     // presence, which is based on the primary numeric-ID signaling socket.
     if (validName(assigned)) this.updatePresence(assigned,true);
+    this.authLog("success", assigned);
   }
 
   async join(socket, user, msg) {
