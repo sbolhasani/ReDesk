@@ -3,15 +3,21 @@ name: ReDesk Cloudflare signaling tests
 on:
   push:
     branches:
+      - main
       - work/redesk-cloudflare-signal-01
     paths:
       - 'cloudflare/signal/**'
       - '.github/workflows/test-cloudflare-signal.yml'
   pull_request:
+    branches: ["main"]
     paths:
       - 'cloudflare/signal/**'
       - '.github/workflows/test-cloudflare-signal.yml'
   workflow_dispatch:
+
+concurrency:
+  group: cloudflare-signal-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
