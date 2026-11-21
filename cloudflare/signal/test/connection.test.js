@@ -49,7 +49,7 @@ test("temporary C- viewer can be targeted by host SDP offer", () => {
   assert.equal(offer.transmission_id,"123456789");
   assert.equal(offer.remote_user_id,"123456789");
   assert.equal(offer.user_id,"123456789");
-  assert.equal(offer.sdp,"v=0\\r\\n".replaceAll("\\r","\r").replaceAll("\\n","\n"));
+  assert.equal(offer.sdp,"v=0\r\n");
   // CrossDesk adds AddConnectionIceConfig to the OFFER for the answerer.
   // MiniRTC rejects an offer with no ICE config after ice_config_version:1.
   assert.equal(offer.ice.version,1);
