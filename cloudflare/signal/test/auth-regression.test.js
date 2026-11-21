@@ -32,10 +32,10 @@ test("both registered primary IDs receive independent login challenges",async()=
     });
     assert.equal(socket.messages.at(-1).type,"login_challenge");
     assert.equal(socket.messages.at(-1).user_id,id);
-    assert.equal(socket.messages.at(-1).password_required,true);
+    assert.equal(socket.messages.at(-1).password_required,false);
   }
 });
-test("failed temporary viewer proof does not lock out the primary device",async()=>{
+test("existing legacy login lock does not block signed primary login challenge",async()=>{
   const {instance,sockets,failures}=setup();
   const viewer=new FakeSocket();
   sockets.push(viewer);
@@ -43,13 +43,15 @@ test("failed temporary viewer proof does not lock out the primary device",async(
     instance.failure("C-123456789");
   }
   assert.equal(instance.throttled("C-123456789"),true);
-  assert.equal(instance.throttled("123456789"),false);
+  for(let n=0;n<6;n++) instance.failure("123456789");
+  assert.equal(instance.throttled("123456789"),true);
+  assert.equal(instance.throttled("123456789"),true);
   const host=new FakeSocket();sockets.push(host);
   await instance.login(host,host.state,{
     type:"login",user_id:"123456789",device_key:{version:1,public_key:"a".repeat(64)}
   });
   assert.equal(host.messages.at(-1).type,"login_challenge");
-  assert.equal(failures.get("123456789"),undefined);
+  assert.equal(failures.get("123456789"),6);
 });
 test("temporary viewer login challenge requires registered owner but not password",async()=>{
   const {instance,sockets}=setup();
