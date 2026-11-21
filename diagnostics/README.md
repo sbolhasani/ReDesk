@@ -16,7 +16,7 @@ It **does not** log TURN passwords, usernames, auth tokens, SDP, media contents,
 
 ## Install on Windows
 
-Use a clean checkout of the named base branch or switch directly to this diagnostic branch **only if your local work is committed or stashed first**:
+Switch to the diagnostic branch only after preserving any uncommitted **ReDesk parent-repository** changes that Git could otherwise overwrite. Existing MiniRTC submodule edits do **not** have to be discarded or stashed: the apply script preserves them when the patch can be applied cleanly.
 
 ```powershell
 cd C:\Users\Saeid\source\sbolhasani\CrossDesk-Upstream
@@ -28,7 +28,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\apply-minirtc-
 xmake -y
 ```
 
-`apply` rejects non-clean tracked MiniRTC files and a mismatched pinned commit; it never deletes, checks out, or resets a user file. It is not intended to run twice without removal.
+`apply` checks the pinned MiniRTC commit and calls `git apply --check` against the **current working-tree contents**, even if MiniRTC already has tracked edits. If every hunk can apply cleanly, other edits remain intact. If there is a conflict, the script stops **without** resetting or stashing anything. It rejects a second application of the same patch. The script does not create a Git commit or modify the recorded submodule revision. You can inspect existing edits safely with `git -C deps/submodules/minirtc status --short` and `git -C deps/submodules/minirtc diff --stat`.
 
 To undo the patch without wiping unrelated MiniRTC edits:
 
