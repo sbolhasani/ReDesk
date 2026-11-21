@@ -149,3 +149,33 @@ and initial Workers/Realtime activation remain outside the setup script.
 
 **Never delete an existing Worker or its Durable Object to fix a permission
 error.** Your device IDs and authenticated records are stored in its SQLite DO.
+
+## Interactive setup and Cloudflare token templates
+
+Run the script **without flags** to see a console menu. The menu offers:
+- Deploy / update Worker and TURN
+- Configure TURN on an **already deployed Worker without redeploying** code
+- Open Cloudflare's account-token creation page for TURN-only or full setup
+- Check the health of an existing Worker
+
+The browser links use Cloudflare's official *API Token Template URLs*
+(`permissionGroupKeys`). Workers Scripts and Account Settings keys use the
+symbolic names documented by Cloudflare. **Verify the form actually selects
+Account → Calls → Write before creating the token**: Cloudflare does not list
+the `calls` symbolic key in its published template reference; if the
+dashboard says the permission cannot be resolved, add Calls Write manually
+rather than creating an insufficient token. The browser remains the authority
+for permissions. No token or password is passed in the browser URL.
+
+When upgrading a known ReDesk account that already runs the signaling Worker,
+select **Configure TURN on existing Worker**. It checks `/health`, skips
+`wrangler deploy`, creates/validates a TURN Key and puts secrets into the
+existing Worker. The nonsecret local state tracks the key ID for future updates.
+
+Cloudflare may reject requests for reasons other than missing permissions
+(e.g. product availability or account policy). The setup now extracts the
+HTTP status and up to three sanitized Cloudflare error codes/messages.
+Avoid pasting raw bearer tokens, full API responses, or local Wrangler
+credential files into support conversations.
+
+Documentation: https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
