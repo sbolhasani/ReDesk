@@ -34,14 +34,14 @@ $oldCloudEmail=$env:CLOUDFLARE_EMAIL
 # Account-owned tokens accept exact permission-group IDs, unlike user tokens.
 # The documented group IDs can be resolved in Cloudflare's permission-groups API.
 function Get-TokenTemplateUrl([string]$Purpose) {
-    # Use the documented *symbolic* permission keys, never guessed IDs.
-    # Cloudflare may reject an unrecognized Calls key in the browser and show
-    # a notice; verify it before clicking Create.
-    $perms=@(@{key="calls";type="edit"})
+    # Verified account-scoped Cloudflare permission-group IDs.
+    # Calls Write, Workers Scripts Write, Account Settings Read.
+    # Source: /accounts/{id}/tokens/permission_groups (Cloudflare).
+    $perms=@(@{key="b711942448db4b0aace44d1312f9fdb0";type="edit"})
     $name="ReDesk TURN Setup"
     if ($Purpose -eq "Full") {
-        $perms+=@{key="workers_scripts";type="edit"}
-        $perms+=@{key="account_settings";type="read"}
+        $perms+=@{key="e086da7e2179491d91ee5f35b3ca210a";type="edit"}
+        $perms+=@{key="c1fde68c7bcc44588cbb6ddbc16d6480";type="read"}
         $name="ReDesk Backend Setup"
     }
     $json=ConvertTo-Json -InputObject @($perms) -Depth 4 -Compress
@@ -57,7 +57,7 @@ function Open-TokenTemplate([string]$Purpose) {
     } else {
         Write-Host "Required permissions: Account / Calls / Write, Workers Scripts / Write, Account Settings / Read."
     }
-    Write-Host "Confirm that Calls / Write really appears; if Cloudflare warns that Calls is unresolved, select Account > Calls > Write manually. Do not create an incomplete token."
+    Write-Host "Verify the preselected permissions before clicking Create. If Cloudflare shows an unresolved-permission warning, do not create the token."
     Write-Host "Cloudflare must still show the token once; copy it privately into this setup tool."
     Write-Host $url
     try { Start-Process -FilePath $url -ErrorAction Stop | Out-Null }
