@@ -64,3 +64,79 @@ Get-Content "$env:LOCALAPPDATA\ReDesk\logs\minirtc.log" |
 - Successful DTLS without a visible frame: inspect SRTP/RTP and Viewer decoding, not merely ICE Ready.
 
 Do not publish raw logs without checking for device identifiers, public IPs, or credentials logged by **other** non-`TURN_DIAG` components.
+
+
+## Phase 2: isolate ICE failures without changing the transport defaults
+
+After applying Phase 1 (already applied on the original test machines), pull the updated
+diagnostics branch and apply the **incremental** Phase 2 patch:
+
+```powershell
+git pull --ff-only
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\apply-minirtc-diagnostics-v2.ps1
+xmake -y
+```
+
+The Phase 2 patch edits only MiniRTC's `src/ice/ice_agent.cpp` and
+`src/ice/ice_server_resolver.h`, leaving Phase 1 intact. It adds:
+- Redacted ICE gathering totals split by relayed-candidate IPv4 vs IPv6;
+- Selected-pair candidate types, address families, and candidate ports (not IPs);
+- **Opt-in** family and TURN server port filters for `Force Relay TCP` only;
+- An **optional, sampled** GLib/libnice message classifier for TURN allocation
+  and ICE connectivity-check activity (no raw libnice messages, IPs or tokens).
+
+The filters are off by default and never affect Force UDP or other TURN modes.
+They intentionally filter **TURN server endpoint addresses**, not Windows
+network interface selection or the relay candidates' allocated address family.
+
+### Set a test configuration (important: dot-source)
+
+From a PowerShell terminal, **dot-source** the helper (note the initial dot
+followed by a space). Do **not** run it via a child `powershell.exe -File`,
+because then the environment changes disappear when that process exits:
+
+```powershell
+# First establish the default behavior (no endpoint restriction).
+. .\scripts\set-minirtc-turn-test.ps1 -Family any -Port any
+
+# Restrict just Force Relay TCP to IPv4 TURN servers on port 3478.
+. .\scripts\set-minirtc-turn-test.ps1 -Family ipv4 -Port 3478 -Libnice
+
+# Then launch the newly-built ReDesk EXE from the SAME PowerShell terminal.
+# Use your actual build output path, or run via the existing Xmake run target.
+```
+
+All switches are process-local; they do not modify the registry or permanent
+environment. A running GUI instance or Windows service cannot inherit new
+variables. Close those processes before retesting. Never test the original
+running Windows service and assume it received an environment setting.
+
+Repeat on Host and Viewer with **the same** family/port settings and independent
+Internet links. Suggested progression:
+
+| Run | Family | Port | Purpose |
+| --- | --- | --- | --- |
+| A | any | any | Reproduce original Cloudflare failure with Phase 2 logging |
+| B | ipv4 | 3478 | Isolate IPv4 TURN connection |
+| C | ipv4 | 80 | Compare other TCP port on IPv4 |
+| D | ipv6 | 3478 | Isolate IPv6 TURN connection |
+| E | ipv6 | 80 | Compare other TCP port on IPv6 |
+
+Use `-Libnice` on one of the failing cases when you need deeper internal
+evidence. The libnice classifier depends on the upstream GLib log domains
+and `NICE_DEBUG` and may not see every allocation or check. It is **not**
+a definitive packet-level trace. For reliable allocation/permission/packet
+details, collect an independent transport trace or implement dedicated
+instrumentation in libnice as a separately reviewed diagnostic step.
+
+### Remove Phase 2 before Phase 1
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\remove-minirtc-diagnostics-v2.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\remove-minirtc-diagnostics.ps1
+xmake -y
+```
+
+Both scripts use preflight checks and never reset unrelated edits such as
+`thirdparty/dav1d/xmake.lua`. In particular, **do not** try to remove
+Phase 1 while Phase 2 is still applied.
