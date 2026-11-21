@@ -43,10 +43,20 @@ test("temporary C- viewer can be targeted by host SDP offer", () => {
     remote_user_id:"C-987654321",user_id:"forged",
     sdp:"v=0\r\n"
   });
-  assert.deepEqual(viewer.messages, [{
-    type:"offer",transmission_id:"123456789",
-    remote_user_id:"123456789",user_id:"123456789",sdp:"v=0\r\n"
-  }]);
+  assert.equal(viewer.messages.length,1);
+  const offer=viewer.messages[0];
+  assert.equal(offer.type,"offer");
+  assert.equal(offer.transmission_id,"123456789");
+  assert.equal(offer.remote_user_id,"123456789");
+  assert.equal(offer.user_id,"123456789");
+  assert.equal(offer.sdp,"v=0\\r\\n".replaceAll("\\r","\r").replaceAll("\\n","\n"));
+  // CrossDesk adds AddConnectionIceConfig to the OFFER for the answerer.
+  // MiniRTC rejects an offer with no ICE config after ice_config_version:1.
+  assert.equal(offer.ice.version,1);
+  assert.equal(typeof offer.ice.id,"string");
+  assert.equal(offer.ice.id.length,36);
+  assert.ok(offer.ice.expires_at > Math.floor(Date.now()/1000));
+  assert.deepEqual(offer.ice.servers,[{urls:["stun:stun.cloudflare.com:3478"]}]);
 });
 
 test("temporary C- viewer can answer to its numeric target host", () => {
