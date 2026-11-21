@@ -117,3 +117,35 @@ remote-access service. Worker account security and password-hash migration,
 rate limits, session recovery, and ICE credential rotation need separate
 hardening and tests. Existing durable device data must not be reset to fix
 a TURN provisioning failure.
+
+## Troubleshooting: Wrangler deployment permissions
+
+ReDesk's provisioning token and Wrangler's local OAuth authentication are
+separate. When `CLOUDFLARE_API_TOKEN` is exported, Wrangler **prefers that
+token** over a previous `wrangler login`. A token sufficient for TURN
+`Calls Write` might not have Workers permissions, and deployment can fail at
+`/accounts/<id>/workers/services/redesk-signal`.
+
+The setup script now checks for a matching Wrangler OAuth account (by Account
+ID), prefers it for **deployment and Worker secrets**, and uses the entered
+scoped token for **Realtime TURN Key creation**. It preserves the caller's
+environment variables and displays Cloudflare error codes without printing
+credentials. It will never silently use an OAuth login from a different account.
+
+When you have already deployed via Wrangler, run:
+
+```powershell
+cd cloudflare\signal
+npx wrangler login
+npx wrangler whoami
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup-redesk-cloudflare.ps1 -Mode Install -AdoptExistingWorker -DeployAuth Wrangler -AccountId YOUR_ACCOUNT_ID
+```
+
+You may also pass `-DeployAuth Token` to require the supplied API token for
+deployment. In that case, grant the token the necessary Workers deployment
+permissions in addition to `Calls Write`; Wrangler may need Account Settings
+Read, depending on your account and configuration. Cloudflare account billing
+and initial Workers/Realtime activation remain outside the setup script.
+
+**Never delete an existing Worker or its Durable Object to fix a permission
+error.** Your device IDs and authenticated records are stored in its SQLite DO.
