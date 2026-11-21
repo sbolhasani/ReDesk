@@ -219,3 +219,45 @@ Use `npm run check`, then `npm run deploy` to enable the new handler.
 This Worker-only change requires no MiniRTC rebuild. Validate password
 rotation on a disposable, **already authenticated** test device first.
 Turn off `DEBUG_LOGIN` after collecting the necessary diagnosis.
+
+## CrossDesk upstream compatibility: signed device login (2026-11-21)
+
+Reference: `kunkundi/crossdesk-server`, branch `cli`, commit
+`2d554408dfd7c5c2fba945292913028d60749f8d`,
+`src/device_login.cpp` (`SignalNegotiation::LoginWithKey`).
+This supersedes the earlier diagnosis that a registered device needs its
+saved connection password to log back in.
+
+- New-device registration still returns `ID@password` and binds the Ed25519
+  key. The generated six-character password now uses CrossDesk's alphanumeric
+  alphabet and rejection sampling.
+- Existing device IDs **with a bound key** use a single-use, 10-second Ed25519
+  challenge. `password_required: false` is returned for both numeric and
+  `C-` identities. The client sends only its ID and signed proof on the second
+  message; passwords are neither required nor verified for signed login.
+- The old password-based `login_throttle` entries are deliberately ignored
+  for these key-bound logins, including pre-existing locked records. No device
+  records or local caches are deleted or regenerated.
+- A mismatching public key or invalid signature still fails authentication.
+  The password is independently checked when **another device joins** this
+  host's transmission.
+- If a previous password change was staged but not committed because the old
+  Worker did not implement `change_password`, ReDesk's existing pending-change
+  recovery may now re-send that request after successfully signing in. If the
+  host's displayed password still fails at Join, use ReDesk's normal change
+  password UI **on the authenticated host**; that sends the standard CrossDesk
+  `change_password` request to update the server, without changing its ID.
+- This resolves the observed `password_mismatch` on registered device Login.
+  It does not assert complete parity for password hashing, rate limiting,
+  recovery tickets or TURN; those remain separately scoped upstream gaps.
+
+After pulling the new branch:
+```powershell
+cd cloudflare\signal
+npm run check
+npm run deploy
+npx wrangler tail
+```
+Then relaunch both ReDesk devices. Validate independent signed login and
+online presence before testing one device's password-protected connection
+to the other. Disable `DEBUG_LOGIN` once diagnosis is finished.
