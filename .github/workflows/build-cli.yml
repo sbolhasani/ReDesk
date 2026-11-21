@@ -2,9 +2,27 @@ name: CLI native builds and npm packages
 
 on:
   push:
-    branches: ["**"]
-    tags-ignore: ["cli-v*", "mcp-v*"]
+    branches: ["main"]
+    paths:
+      - "apps/cli/**"
+      - "apps/mcp/**"
+      - "deps/submodules/minirtc"
+      - "deps/thirdparty/**"
+      - "libs/**"
+      - "xmake.lua"
+      - "scripts/version.py"
+      - ".github/workflows/build-cli.yml"
   pull_request:
+    branches: ["main"]
+    paths:
+      - "apps/cli/**"
+      - "apps/mcp/**"
+      - "deps/submodules/minirtc"
+      - "deps/thirdparty/**"
+      - "libs/**"
+      - "xmake.lua"
+      - "scripts/version.py"
+      - ".github/workflows/build-cli.yml"
   workflow_dispatch:
   workflow_call:
 

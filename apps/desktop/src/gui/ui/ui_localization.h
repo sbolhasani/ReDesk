@@ -146,6 +146,10 @@ inline int ApplyMainWindowStrings(
   strings.set_pause_video_when_minimized_hint(
       Text(localization::pause_video_when_minimized_hint[language]));
   strings.set_force_relay(Text(localization::force_relay[language]));
+  strings.set_turn_mode(Text(localization::Literal("TURN 连接模式", language)));
+  strings.set_turn_auto(Text(localization::Literal("自动（直连或中继）", language)));
+  strings.set_turn_force_udp(Text(localization::Literal("强制中继（UDP）", language)));
+  strings.set_turn_force_tcp(Text(localization::Literal("强制中继（TCP）", language)));
   strings.set_self_hosted(
       Text(localization::self_hosted_server_config[language]));
   strings.set_autostart(Text(localization::enable_autostart[language]));

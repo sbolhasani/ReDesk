@@ -218,6 +218,10 @@ struct RemoteSession {
   // Shared by minirtc callbacks, Slint rendering and SDL audio callbacks.
   std::atomic<MiniRtcConnectionStatus> connection_status_ = MiniRtcConnectionStatus::MiniRtcConnectionClosed;
   std::atomic<MiniRtcTraversalMode> traversal_mode_{MiniRtcTraversalMode::MiniRtcTraversalUnknown};
+  // Transport thread timestamps Connected; UI uses it only for first-frame
+  // diagnostics, never to fabricate an ICE failure or reset a live connection.
+  std::atomic<int64_t> connected_since_ms_{0};
+  std::atomic<bool> first_video_wait_reported_{false};
   int fps_ = 0;
   int frame_count_ = 0;
   std::chrono::steady_clock::time_point last_time_;

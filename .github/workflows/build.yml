@@ -2,9 +2,10 @@ name: Build and Release
 
 on:
   push:
+    # Full multi-platform builds are for main, tags, or explicit manual runs.
+    # Do not spend Windows/macOS/Linux minutes on each Cloudflare feature push.
     branches:
-      - "**"
-      - "!ci/linux-build-image"
+      - main
     tags:
       - "*"
       - "!ios-v*"
@@ -557,12 +558,14 @@ jobs:
           $portableDir = "${{ github.workspace }}\portable"
           New-Item -ItemType Directory -Force -Path $portableDir
 
+          # Xmake target names remain crossdesk*, but Windows output basenames
+          # were renamed to ReDesk/redesk_* in apps/desktop/xmake/targets.lua.
           $portableFiles = @(
-            @("crossdesk.exe", "CrossDesk.exe"),
-            @("crossdesk_service.exe", "crossdesk_service.exe"),
-            @("crossdesk_session_helper.exe", "crossdesk_session_helper.exe"),
-            @("crossdesk_privacy_cursor_helper.exe", "crossdesk_privacy_cursor_helper.exe"),
-            @("crossdesk_privacy_window.dll", "crossdesk_privacy_window.dll"),
+            @("ReDesk.exe", "ReDesk.exe"),
+            @("redesk_service.exe", "redesk_service.exe"),
+            @("redesk_session_helper.exe", "redesk_session_helper.exe"),
+            @("redesk_privacy_cursor_helper.exe", "redesk_privacy_cursor_helper.exe"),
+            @("redesk_privacy_window.dll", "redesk_privacy_window.dll"),
             @("slint_cpp.dll", "slint_cpp.dll")
           )
 

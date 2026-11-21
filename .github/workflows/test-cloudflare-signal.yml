@@ -1,0 +1,50 @@
+name: ReDesk Cloudflare signaling tests
+
+on:
+  push:
+    branches:
+      - main
+      - work/redesk-cloudflare-signal-01
+    paths:
+      - 'cloudflare/signal/**'
+      - '.github/workflows/test-cloudflare-signal.yml'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - 'cloudflare/signal/**'
+      - '.github/workflows/test-cloudflare-signal.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cloudflare-signal-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  worker-tests:
+    name: Worker unit and protocol tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: cloudflare/signal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm run check
+      - name: Parse PowerShell setup script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path (Get-Location) 'setup-redesk-cloudflare.ps1'),
+            [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }

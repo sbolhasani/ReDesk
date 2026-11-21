@@ -24,20 +24,6 @@ on:
       version:
         description: "Android artifact version; combined releases match the desktop tag."
         value: ${{ jobs.build.outputs.version }}
-  pull_request:
-    paths:
-      - ".github/workflows/build-android.yml"
-      - ".github/workflows/build.yml"
-      - ".github/workflows/release-mobile.yml"
-      - ".github/workflows/sign-android.yml"
-      - ".gitmodules"
-      - "LICENSE"
-      - "PRIVACY.md"
-      - "apps/android/**"
-      - "apps/ios/CrossDeskMobile/Resources/ThirdPartyLicenses.json"
-      - "apps/ios/licenses/**"
-      - "deps/submodules/minirtc"
-      - "libs/wire/**"
 
 permissions:
   contents: read

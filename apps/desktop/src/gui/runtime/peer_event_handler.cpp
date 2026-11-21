@@ -359,6 +359,16 @@ void PeerEventHandler::DispatchConnectionStatus(MiniRtcConnectionStatus status,
     runtime->is_client_mode_ = true;
     if (!props->wall_managed_) runtime->show_connection_status_window_ = true;
     props->connection_status_.store(status);
+    if (status == MiniRtcConnectionStatus::MiniRtcConnectionConnected) {
+      props->connected_since_ms_.store(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now().time_since_epoch()).count());
+      props->first_video_wait_reported_.store(false);
+    } else if (status == MiniRtcConnectionStatus::MiniRtcConnectionDisconnected ||
+               status == MiniRtcConnectionStatus::MiniRtcConnectionFailed ||
+               status == MiniRtcConnectionStatus::MiniRtcConnectionClosed) {
+      props->connected_since_ms_.store(0);
+    }
     if (status != MiniRtcConnectionStatus::MiniRtcConnectionConnecting && status != MiniRtcConnectionStatus::MiniRtcConnectionGathering)
       props->connection_auth_.Complete();
 

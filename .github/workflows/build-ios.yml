@@ -24,17 +24,6 @@ on:
       version:
         description: "iOS artifact version; combined releases match the desktop tag."
         value: ${{ jobs.build.outputs.version }}
-  pull_request:
-    paths:
-      - ".github/workflows/build-ios.yml"
-      - ".github/workflows/build.yml"
-      - ".github/workflows/release-mobile.yml"
-      - ".gitmodules"
-      - "LICENSE"
-      - "apps/ios/**"
-      - "deps/submodules/minirtc"
-      - "libs/wire/**"
-      - "xmake.lua"
 
 permissions:
   contents: read

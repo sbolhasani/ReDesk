@@ -1,0 +1,541 @@
+/*
+ * ReDesk Cloudflare Worker signaling prototype.
+ *
+ * Durable Object owns authentication, presence and authorized peer routing.
+ * NO media or relay bytes are carried through Worker WebSockets.
+ * STUN-only ICE is deliberately the first milestone; TURN requires a separate
+ * service and per-connection credentials. Do not expose privileged endpoints.
+ */
+
+const MAX_MESSAGE = 64 * 1024;
+const CHALLENGE_MS = 30_000;
+const SIGNATURE_CHALLENGE_MS = 10_000; // CrossDesk single-use proof deadline.
+const MAX_CONNECTIONS = 200; // Single hub is for initial testing, not scaling.
+const ICE_LIFETIME = 1800;
+const TURN_TTL_SECONDS = 6 * 60 * 60;
+const TURN_ISSUE_TIMEOUT_MS = 8000;
+// MiniRTC's current libnice backend accepts stun:/turn: but not turns:.
+// Cloudflare includes turns: URLs in its response; keep only compatible
+// cloudflare.com TURN/UDP and TURN/TCP endpoints, never forward long-term keys.
+const SUPPORTED_CF_TURN = /^turn:turn\.cloudflare\.com:(?:3478|80|443)\?transport=(?:udp|tcp)$/;
+const ID = /^\d{9}$/;
+// MiniRTC creates a second signaling connection for each outgoing session,
+// using C-<own ID>. It must prove possession of the registered device key.
+const SESSION_ID = /^C-\d{9}$/;
+const HEX32 = /^[0-9a-f]{64}$/;
+const HEX64 = /^[0-9a-f]{128}$/;
+const DEVICE_PASSWORD = /^[A-Za-z0-9]{6}$/;
+const ROOM_FIELDS = new Set(["offer", "answer", "new_candidate", "new_candidate_mid"]);
+
+function hex(bytes) {
+  return [...bytes].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+function unhex(s) {
+  return Uint8Array.from(s.match(/../g), x => parseInt(x, 16));
+}
+function randomHex(n = 32) {
+  return hex(crypto.getRandomValues(new Uint8Array(n)));
+}
+function randomPassword() {
+  // Match CrossDesk's six-character alphanumeric rejection sampling.
+  const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  let value = "";
+  while (value.length < 6) {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    for (const byte of bytes) {
+      if (byte < 248 && value.length < 6) value += alphabet[byte % 62];
+    }
+  }
+  return value;
+}
+function now() { return Math.floor(Date.now() / 1000); }
+function validName(s) { return typeof s === "string" && ID.test(s); }
+function validPeerName(s) { return typeof s === "string" && (ID.test(s) || SESSION_ID.test(s)); }
+function ownerId(s) { return SESSION_ID.test(s) ? s.slice(2) : s; }
+function safeSend(socket, obj) {
+  try { socket.send(JSON.stringify(obj)); return true; } catch { return false; }
+}
+function ctEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+async function passwordDigest(password, salt) {
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256",
+    new TextEncoder().encode(salt + ":" + password))));
+}
+async function verifyProof(keyHex, id, nonce, signatureHex) {
+  if (!HEX32.test(keyHex) || !HEX32.test(nonce) || !HEX64.test(signatureHex)) return false;
+  try {
+    const key = await crypto.subtle.importKey("raw", unhex(keyHex), {name:"Ed25519"}, false, ["verify"]);
+    const transcript = JSON.stringify(["crossdesk.device-login.v1", id, keyHex, nonce]);
+    return await crypto.subtle.verify("Ed25519", key, unhex(signatureHex),
+      new TextEncoder().encode(transcript));
+  } catch { return false; }
+}
+function iceSnapshot() {
+  return {
+    version: 1, id: crypto.randomUUID(), expires_at: now() + ICE_LIFETIME,
+    servers: [{urls:["stun:stun.cloudflare.com:3478"]}]
+  };
+}
+function reject(socket, reason, type = "error") { safeSend(socket, {type, status:"failed", reason}); }
+function identifier(raw) { return raw.slice(0, raw.indexOf("@") < 0 ? undefined : raw.indexOf("@")); }
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (url.pathname === "/health" && request.method === "GET") {
+      return Response.json({ok:true, service:"ReDesk signaling",
+        protocol:"crossdesk-minirtc-v1", media_relay:false,
+        turn_configured:Boolean(env.TURN_KEY_ID && env.TURN_API_TOKEN)});
+    }
+    if (url.pathname !== "/signal" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Not found", {status:404});
+    }
+    // Named DO ensures WS clients and their account directory share one
+    // coordinator. Split/shard only when cross-shard routing is implemented.
+    const obj = env.SIGNAL_HUB.get(env.SIGNAL_HUB.idFromName("redesk-v1"));
+    return obj.fetch(request);
+  }
+};
+
+export class SignalHub {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, public_key TEXT NOT NULL, salt TEXT NOT NULL, hash TEXT NOT NULL)");
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS login_throttle (id TEXT PRIMARY KEY, failures INTEGER NOT NULL, locked_until INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS join_throttle (id TEXT PRIMARY KEY, failures INTEGER NOT NULL, locked_until INTEGER NOT NULL)");
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, host TEXT NOT NULL, guest TEXT NOT NULL, created INTEGER NOT NULL)");
+    // Session authorization must survive DO hibernation. SQLite persists
+    // tickets; socket.serializeAttachment persists authenticated identity.
+  }
+
+  async fetch(request) {
+    if (this.ctx.getWebSockets().length >= MAX_CONNECTIONS)
+      return new Response("Capacity reached", {status:503});
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1]);
+    pair[1].serializeAttachment({phase:"new", at:Date.now(), user:null});
+    return new Response(null, {status:101, webSocket:pair[0]});
+  }
+
+  socket(id) {
+    if (!validPeerName(id)) return null;
+    // getWebSockets() returns sockets still associated with this Durable Object,
+    // including those restored after WebSocket hibernation. Some runtime/mock
+    // adapters don't expose readyState consistently on these server-side
+    // handles. The durable authenticated attachment, not a numeric state
+    // comparison, is the identity source of truth.
+    return this.ctx.getWebSockets().find(ws => {
+      const state = ws.deserializeAttachment();
+      return state?.phase === "authenticated" && state.user === id;
+    }) ?? null;
+  }
+  online(id) { return validName(id) && this.socket(id) !== null; }
+  send(id, data) {
+    const target = this.socket(id);
+    return target ? safeSend(target, data) : false;
+  }
+  updatePresence(id, online) {
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment();
+      if (att?.phase === "authenticated" && att.subscriptions?.includes(id)) {
+        safeSend(ws, {type:"presence_update", id, online});
+      }
+    }
+  }
+  failure(id) {
+    if (!id) return;
+    const old = this.ctx.storage.sql.exec("SELECT failures, locked_until FROM login_throttle WHERE id=?", id).toArray()[0];
+    // Unlocked attempts must accumulate until the threshold. Restart the
+    // counter only when a previous lock has actually expired.
+    const count = old?.locked_until && old.locked_until <= now()
+      ? 1 : (old?.failures ?? 0) + 1;
+    const locked = count >= 6 ? now() + 300 : 0;
+    this.ctx.storage.sql.exec(
+      "INSERT INTO login_throttle(id,failures,locked_until) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until",
+      id, count, locked);
+  }
+  throttled(id) {
+    const row = this.ctx.storage.sql.exec("SELECT locked_until FROM login_throttle WHERE id=?", id).toArray()[0];
+    return row && row.locked_until > now();
+  }
+  clearFailure(id) {
+    this.ctx.storage.sql.exec("DELETE FROM login_throttle WHERE id=?", id);
+  }
+  // Diagnostics report only a peer category and a protocol reason; never log
+  // device identifiers, credentials, Ed25519 keys, SDP or ICE candidates.
+  authLog(event, id, reason = "", check = "") {
+    if (event !== "rejected" && this.env?.DEBUG_LOGIN !== "1") return;
+    const kind = !id ? "new" : SESSION_ID.test(id) ? "viewer" :
+      validName(id) ? "device" : "invalid";
+    const detail = {event, kind, reason};
+    // Optional private diagnostic classification, never sent to clients.
+    // Do not record IDs, password values, hashes, keys, or network addresses.
+    if (check && this.env?.DEBUG_LOGIN === "1") detail.check = check;
+    if (event === "rejected") console.warn("redesk.auth", detail);
+    else console.info("redesk.auth", detail);
+  }
+  denyLogin(socket, id, reason, check = "") {
+    this.authLog("rejected", id, reason, check);
+    reject(socket, reason, "login");
+  }
+  account(id) {
+    return this.ctx.storage.sql.exec("SELECT id, public_key, salt, hash FROM devices WHERE id=?", id).toArray()[0];
+  }
+  joinThrottled(id) {
+    const row=this.ctx.storage.sql.exec("SELECT locked_until FROM join_throttle WHERE id=?",id).toArray()[0];
+    return Boolean(row && row.locked_until > now());
+  }
+  async connectionIce() {
+    const keyId = this.env?.TURN_KEY_ID;
+    const apiToken = this.env?.TURN_API_TOKEN;
+    if (!keyId && !apiToken) return iceSnapshot();
+    if (!/^[0-9a-f]{32}$/i.test(keyId ?? "") || !apiToken) {
+      console.warn("redesk.turn", {event:"credential_unavailable",reason:"configuration"});
+      return iceSnapshot();
+    }
+    const expiresAt = now() + TURN_TTL_SECONDS - 60;
+    try {
+      // Cloudflare Realtime credentials are issued per authorized connection.
+      // TURN_KEY_ID is public metadata; TURN_API_TOKEN is a Worker Secret.
+      const response = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
+        {method:"POST",headers:{
+          Authorization:`Bearer ${apiToken}`,
+          "Content-Type":"application/json"
+        },body:JSON.stringify({ttl:TURN_TTL_SECONDS}),
+          signal:AbortSignal.timeout(TURN_ISSUE_TIMEOUT_MS)});
+      if (!response.ok) throw new Error("provider_response");
+      const data = await response.json();
+      if (!Array.isArray(data?.iceServers)) throw new Error("invalid_provider_data");
+      const servers = [{urls:["stun:stun.cloudflare.com:3478"]}];
+      for (const entry of data.iceServers) {
+        if (!entry || typeof entry !== "object") continue;
+        const urls = (Array.isArray(entry.urls) ? entry.urls : [entry.urls])
+          .filter(url => typeof url === "string" && SUPPORTED_CF_TURN.test(url));
+        if (!urls.length) continue;
+        if (typeof entry.username !== "string" || !entry.username ||
+            entry.username.length > 512 || entry.username.includes("\0") ||
+            typeof entry.credential !== "string" || !entry.credential ||
+            entry.credential.length > 512 || entry.credential.includes("\0"))
+          throw new Error("invalid_provider_data");
+        servers.push({urls,username:entry.username,credential:entry.credential,
+          expires_at:expiresAt});
+      }
+      if (servers.length < 2) throw new Error("unsupported_provider_urls");
+      return {version:1,id:crypto.randomUUID(),expires_at:expiresAt,servers};
+    } catch (error) {
+      // Keep direct P2P working if the external TURN API is unavailable;
+      // forced-TURN mode will correctly reject the STUN-only snapshot.
+      // Do not log API responses, bearer tokens, credentials or peer IDs.
+      const reason = error?.message === "provider_response" ? "provider_response" :
+        error?.message === "unsupported_provider_urls" ? "unsupported_urls" :
+        error?.message === "invalid_provider_data" ? "invalid_data" : "request_failed";
+      console.warn("redesk.turn",{event:"credential_unavailable",reason});
+      return iceSnapshot();
+    }
+  }
+  recordJoinFailure(id) {
+    const row=this.ctx.storage.sql.exec("SELECT failures,locked_until FROM join_throttle WHERE id=?",id).toArray()[0];
+    const count=row?.locked_until && row.locked_until<=now()
+      ? 1 : (row?.failures ?? 0)+1;
+    const until=count>=6?now()+300:0;
+    this.ctx.storage.sql.exec(
+      "INSERT INTO join_throttle(id,failures,locked_until) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until",
+      id,count,until);
+  }
+
+  async webSocketMessage(socket, data) {
+    if (typeof data !== "string" || data.length > MAX_MESSAGE) { socket.close(1009, "Too large"); return; }
+    let msg;
+    try { msg = JSON.parse(data); } catch { reject(socket,"invalid_json"); return; }
+    if (!msg || typeof msg !== "object" || Array.isArray(msg) || typeof msg.type !== "string") {
+      reject(socket,"invalid_message"); return;
+    }
+    const state = socket.deserializeAttachment() ?? {phase:"new"};
+    // Limit traffic from unauthenticated clients.
+    if (state.phase !== "authenticated" && Date.now() - (state.at ?? 0) > CHALLENGE_MS) {
+      socket.close(1008, "Login timeout"); return;
+    }
+    if (msg.type === "login") {
+      await this.login(socket, state, msg);
+      return;
+    }
+    if (state.phase !== "authenticated") { reject(socket,"not_authenticated"); return; }
+    const user = state.user;
+    if (msg.type === "recent_connections_presence") {
+      const devices = Array.isArray(msg.devices) ? msg.devices.filter(validName).slice(0, 128) : [];
+      // A one-shot probe must not erase long-lived presence subscriptions.
+      if (msg.subscribe !== false) {
+        state.subscriptions = devices;
+        socket.serializeAttachment(state);
+      }
+      const results = devices.map(id => ({id, online:this.online(id)}));
+      if (this.env?.DEBUG_PRESENCE === "1") {
+        // Never log IDs, passwords, device public keys or SDP.
+        console.info("redesk.presence", {
+          requested: results.length,
+          online: results.filter(x => x.online).length,
+          sockets: this.ctx.getWebSockets().length,
+          one_shot: msg.subscribe === false
+        });
+      }
+      safeSend(socket, {type:"presence", devices:results});
+    } else if (msg.type === "join_transmission") {
+      await this.join(socket, user, msg);
+    } else if (msg.type === "change_password") {
+      await this.changePassword(socket, user, msg);
+    } else if (msg.type === "user_leave_transmission") {
+      this.leave(user, msg.transmission_id);
+    } else if (msg.type === "disconnect_peer") {
+      this.leave(user, msg.transmission_id);
+    } else if (ROOM_FIELDS.has(msg.type)) {
+      await this.relay(socket, user, msg);
+    } else if (msg.type === "session_report") {
+      // No authorization is derived from client session reports.
+    } else if (msg.type === "client_info" || msg.type === "ping") {
+      // Optional telemetry, intentionally ignored (no personal data stored).
+    } else {
+      reject(socket,"unsupported_type",msg.type);
+    }
+  }
+
+  async login(socket, state, msg) {
+    if (state.phase === "authenticated") { reject(socket,"already_logged_in"); return; }
+    if (state.phase === "new") {
+      if (typeof msg.user_id !== "string" || msg.user_id.length > 32 ||
+          !msg.device_key || msg.device_key.version !== 1 ||
+          !HEX32.test(msg.device_key.public_key)) {
+        this.denyLogin(socket, "", "invalid_login"); return;
+      }
+      const id = identifier(msg.user_id);
+      if (id !== "" && !validPeerName(id)) { this.denyLogin(socket,id,"invalid_id"); return; }
+      const parent = ownerId(id);
+      // CrossDesk: signed login for a key-bound ID is NOT a password attempt.
+      // Existing password-failure counters must never lock a valid device.
+      const account = parent ? this.account(parent) : null;
+      if (parent && !account) { this.denyLogin(socket,id,"unknown_id"); return; }
+      // All IDs issued by this Worker have a bound key. Upstream only asks
+      // for a password when binding a legacy, unbound device for the first time.
+      const passwordRequired = false;
+      const nonce = randomHex();
+      socket.serializeAttachment({phase:"challenge",at:Date.now(),user:null,id,
+        key:msg.device_key.public_key,nonce, passwordRequired});
+      safeSend(socket, {type:"login_challenge",user_id:id,nonce,device_key_version:1,
+        password_required:passwordRequired});
+      this.authLog("challenge", id);
+      return;
+    }
+    if (state.phase !== "challenge" || Date.now() - state.at > SIGNATURE_CHALLENGE_MS) {
+      this.denyLogin(socket,state.id ?? "","invalid_login_state"); return;
+    }
+    // Consume a challenge before awaiting verification; prevent replay/races.
+    socket.serializeAttachment({...state,phase:"verifying"});
+    const id = state.id;
+    const presented = typeof msg.user_id === "string" ? msg.user_id : "";
+    const password = presented.includes("@") ? presented.slice(presented.indexOf("@") + 1) : "";
+    if (identifier(presented) !== id || !msg.device_key ||
+        msg.device_key.public_key !== state.key || msg.device_key.nonce !== state.nonce ||
+        !(await verifyProof(state.key, id, state.nonce, msg.device_key.signature))) {
+      this.denyLogin(socket,id,"invalid_proof");
+      socket.close(1008,"Authentication failed"); return;
+    }
+    let assigned = id;
+    let initialPassword = null;
+    if (SESSION_ID.test(id)) {
+      // Only the physical device that owns the numeric ID may use C-<ID>.
+      // The signed challenge binds this temporary session to that device key.
+      const parent = ownerId(id);
+      const row = this.account(parent);
+      const check = !row ? "account_missing" :
+        row.public_key !== state.key ? "device_key_mismatch" :
+        (password || presented.includes("@")) ? "unexpected_password" : "";
+      if (check) {
+        this.denyLogin(socket,id,"invalid_credentials",check);
+        socket.close(1008,"Authentication failed"); return;
+      }
+    } else if (id) {
+      const row = this.account(id);
+      // CrossDesk LoginWithKey only requires the bound key's signature.
+      // The connection password is separately verified at Join.
+      const check = !row ? "account_missing" :
+        row.public_key !== state.key ? "device_key_mismatch" :
+        presented.includes("@") ? "unexpected_password" : "";
+      if (check) {
+        this.denyLogin(socket,id,"invalid_credentials",check);
+        socket.close(1008,"Authentication failed"); return;
+      }
+    } else {
+      // A new ID is allocated only after proof of the client's private key.
+      for (let i=0; i<25; i++) {
+        const candidate = String(100000000 + Math.floor(crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296 * 900000000));
+        if (!this.account(candidate)) { assigned = candidate; break; }
+      }
+      if (!assigned) { this.denyLogin(socket,id,"capacity"); return; }
+      initialPassword = randomPassword();
+      const salt = randomHex(16);
+      const hash = await passwordDigest(initialPassword, salt);
+      this.ctx.storage.sql.exec("INSERT INTO devices(id,public_key,salt,hash) VALUES(?,?,?,?)",
+        assigned,state.key,salt,hash);
+    }
+
+    // Close an older connection to keep one authoritative peer per ID.
+    const prior = this.socket(assigned);
+    if (prior && prior !== socket) {
+      this.authLog("replaced_existing_socket", assigned);
+      prior.close(4001,"New login");
+    }
+    socket.serializeAttachment({phase:"authenticated",at:Date.now(),user:assigned,subscriptions:[]});
+    safeSend(socket,{type:"login",status:"success",
+      user_id:initialPassword ? assigned+"@"+initialPassword : assigned,
+      device_key_version:1,ice_config_version:1});
+    // Viewer C- sessions are ephemeral and must not alter the owner's
+    // presence, which is based on the primary numeric-ID signaling socket.
+    if (validName(assigned)) this.updatePresence(assigned,true);
+    this.authLog("success", assigned);
+  }
+
+  async changePassword(socket, user, msg) {
+    // ReDesk first stages the new credential on disk, then sends this
+    // request over the already authenticated primary device socket.
+    // A temporary C- viewer MUST NOT be able to rotate its host's password.
+    const requestId = msg.request_id;
+    const reply = (status, reason) => {
+      const payload = {type:"change_password",status,user_id:user};
+      if (typeof requestId === "string") payload.request_id = requestId;
+      if (reason) payload.reason = reason;
+      safeSend(socket,payload);
+    };
+    if (!validName(user) || this.socket(user) !== socket) {
+      reply("failed", "not_authorized");
+      return;
+    }
+    if (typeof requestId !== "string" || requestId.length < 1 ||
+        requestId.length > 128 || /[\x00-\x1f\x7f]/.test(requestId) ||
+        !DEVICE_PASSWORD.test(msg.new_password)) {
+      reply("failed", "invalid_request");
+      return;
+    }
+    const account = this.account(user);
+    if (!account) { reply("failed", "unknown_id"); return; }
+    const salt = randomHex(16);
+    const hash = await passwordDigest(msg.new_password, salt);
+    // Another login may have replaced this WebSocket while digesting.
+    if (this.socket(user) !== socket) { reply("failed", "not_authorized"); return; }
+    this.ctx.storage.sql.exec(
+      "UPDATE devices SET salt=?, hash=? WHERE id=? AND public_key=?",
+      salt, hash, user, account.public_key);
+    reply("success");
+  }
+
+  async join(socket, user, msg) {
+    if (typeof msg.transmission_id !== "string" || msg.transmission_id.length > 40) {
+      reject(socket,"invalid_target","user_join_transmission"); return;
+    }
+    const target = identifier(msg.transmission_id);
+    const password = msg.transmission_id.includes("@") ? msg.transmission_id.split("@",2)[1] : "";
+    const roomFail = reason => safeSend(socket,{type:"user_join_transmission",status:"failed",
+      transmission_id:msg.transmission_id,reason});
+    if (!validName(target) || target === user) { roomFail("invalid_target"); return; }
+    const account = this.account(target);
+    if (!account || !this.online(target)) { roomFail("remote_unavailable"); return; }
+    if (this.joinThrottled(target)) { roomFail("rate_limited"); return; }
+    if (!password || !ctEqual(account.hash,await passwordDigest(password,account.salt))) {
+      this.recordJoinFailure(target);
+      roomFail("incorrect_password"); return;
+    }
+    this.ctx.storage.sql.exec("DELETE FROM join_throttle WHERE id=?",target);
+    const ticket = randomHex();
+    this.ctx.storage.sql.exec(
+      "INSERT INTO sessions(token,host,guest,created) VALUES(?,?,?,?)",
+      ticket,target,user,now());
+    const ice=await this.connectionIce();
+    // The host can disconnect while the external provider issues credentials.
+    if (!this.online(target) || this.socket(user) !== socket) {
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",ticket);
+      roomFail("remote_unavailable"); return;
+    }
+    // Host and viewer receive the same canonical transmission ID (without its
+    // secret), plus the *other* endpoint's authenticated identity.
+    const sessionTicket = {type:"session_ticket",transmission_id:target,
+      host_id:target,guest_id:user,token:ticket};
+    // The host (offerer) alone receives user_join_transmission and creates
+    // the SDP offer. Sending user_join_transmission to the viewer too makes
+    // both peers offer simultaneously and resets ICE transports.
+    if (!this.send(target,sessionTicket)) {
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",ticket);
+      roomFail("remote_unavailable");
+      return;
+    }
+    safeSend(socket,sessionTicket);
+    if (!this.send(target,{type:"user_join_transmission",status:"success",
+      transmission_id:target,user_id:user,ice})) {
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",ticket);
+      roomFail("remote_unavailable");
+    }
+  }
+  room(user,target,transmission) {
+    this.ctx.storage.sql.exec("DELETE FROM sessions WHERE created<?", now()-7200);
+    return this.ctx.storage.sql.exec(
+      "SELECT token FROM sessions WHERE host=? AND ((host=? AND guest=?) OR (host=? AND guest=?)) LIMIT 1",
+      transmission,user,target,target,user).toArray()[0] ?? null;
+  }
+  async relay(socket,user,msg) {
+    const target=msg.remote_user_id,transmission=identifier(msg.transmission_id ?? "");
+    if (!validPeerName(target) || !validName(transmission) ||
+        !this.room(user,target,transmission)) {reject(socket,"not_in_session");return;}
+    const payload=JSON.stringify(msg);
+    if (payload.length>MAX_MESSAGE ||
+        ((msg.type==="offer" || msg.type==="answer") && (typeof msg.sdp!=="string" || msg.sdp.length>48*1024)) ||
+        ((msg.type==="new_candidate" || msg.type==="new_candidate_mid") &&
+          !["sdp","candidate"].some(k=>typeof msg[k]==="string" && msg[k].length<4096))) {
+      reject(socket,"invalid_signal");return;
+    }
+    // Match CrossDesk SignalNegotiation::offer: the answerer needs a fresh
+    // per-connection ICE snapshot in the offer. MiniRTC's BuildConnectionInfo
+    // rejects offers without "ice" after login advertises ice_config_version:1.
+    // The host received its separate snapshot in user_join_transmission.
+    // Do not trust sender-provided ICE/server credentials or sender identity.
+    const routed = {...msg,user_id:user,remote_user_id:user,transmission_id:transmission};
+    if (msg.type === "offer") {
+      routed.ice = await this.connectionIce();
+      // A session may be revoked while waiting for Cloudflare Realtime.
+      if (this.socket(user) !== socket || !this.room(user,target,transmission)) return;
+    } else delete routed.ice;
+    this.send(target,routed);
+  }
+  leave(user,rawTarget) {
+    const target=identifier(typeof rawTarget==="string" ? rawTarget : "");
+    const rows=this.ctx.storage.sql.exec(
+      "SELECT token,host,guest FROM sessions WHERE (host=? OR guest=?)",user,user).toArray();
+    for (const r of rows) {
+      if (target && r.host!==target) continue;
+      const other=r.host===user?r.guest:r.host;
+      this.send(other,{type:"user_leave_transmission",user_id:user,transmission_id:r.host});
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",r.token);
+    }
+  }
+  webSocketClose(socket) { this.cleanup(socket); }
+  webSocketError(socket) { this.cleanup(socket); }
+  cleanup(socket) {
+    const state=socket.deserializeAttachment();
+    if (state?.phase!=="authenticated") return;
+    const id=state.user;
+    const rows=this.ctx.storage.sql.exec(
+      "SELECT token,host,guest FROM sessions WHERE host=? OR guest=?",id,id).toArray();
+    for (const r of rows) {
+      const other=r.host===id?r.guest:r.host;
+      this.send(other,{type:"user_leave_transmission",user_id:id,transmission_id:r.host});
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",r.token);
+    }
+    if (validName(id) && !this.online(id)) this.updatePresence(id,false);
+  }
+}

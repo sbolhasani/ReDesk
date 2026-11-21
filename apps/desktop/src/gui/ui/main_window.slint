@@ -78,6 +78,10 @@ export global UiStrings {
     in-out property <string> pause-video-when-minimized: "Pause video when minimized";
     in-out property <string> pause-video-when-minimized-hint: "Pause video reception when the control window is minimized to reduce local decoding resource usage.";
     in-out property <string> force-relay: "Force relay";
+    in-out property <string> turn-mode: "TURN connection mode";
+    in-out property <string> turn-auto: "Auto (P2P / Relay)";
+    in-out property <string> turn-force-udp: "Force Relay (UDP)";
+    in-out property <string> turn-force-tcp: "Force Relay (TCP)";
     in-out property <string> self-hosted: "Self-hosted server";
     in-out property <string> autostart: "Start with system";
     in-out property <string> daemon: "Run in background";
@@ -741,6 +745,8 @@ export component MainWindow inherits Window {
     in-out property <bool> lan-listen-all-draft: true;
     in property <string> settings-save-error;
     in-out property <bool> force-relay-enabled: false;
+    // 0 Auto, 1 Force UDP, 2 Force TCP; disabled mode is intentionally not exposed.
+    in-out property <int> turn-mode-index: 0;
     in-out property <bool> self-hosted-enabled: false;
     in-out property <bool> autostart-enabled: false;
     in property <bool> autostart-available: true;
@@ -2974,7 +2980,15 @@ export component MainWindow inherits Window {
                                 checked <=> root.lan-listen-all-draft;
                                 enabled: root.ip-direct-enabled-draft;
                             }
-                            SettingsToggleRow { label: UiStrings.force-relay; checked <=> root.force-relay-enabled; enabled: !root.settings-session-active; }
+                            SettingsRow {
+                                label: UiStrings.turn-mode; enabled: !root.settings-session-active;
+                                SettingsSelect {
+                                    x: parent.width - 216px; y: 4px; width: 204px;
+                                    enabled: !root.settings-session-active;
+                                    model: [UiStrings.turn-auto, UiStrings.turn-force-udp, UiStrings.turn-force-tcp];
+                                    current-index <=> root.turn-mode-index;
+                                }
+                            }
                             SettingsToggleRow {
                                 label: UiStrings.self-hosted;
                                 label-reserve: self-host-edit.width + 84px;
