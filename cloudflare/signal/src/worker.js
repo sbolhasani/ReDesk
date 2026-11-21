@@ -136,7 +136,10 @@ export class SignalHub {
   failure(id) {
     if (!id) return;
     const old = this.ctx.storage.sql.exec("SELECT failures, locked_until FROM login_throttle WHERE id=?", id).toArray()[0];
-    const count = (old?.locked_until > now() ? old.failures : 0) + 1;
+    // Unlocked attempts must accumulate until the threshold. Restart the
+    // counter only when a previous lock has actually expired.
+    const count = old?.locked_until && old.locked_until <= now()
+      ? 1 : (old?.failures ?? 0) + 1;
     const locked = count >= 6 ? now() + 300 : 0;
     this.ctx.storage.sql.exec(
       "INSERT INTO login_throttle(id,failures,locked_until) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until",
@@ -151,16 +154,19 @@ export class SignalHub {
   }
   // Diagnostics report only a peer category and a protocol reason; never log
   // device identifiers, credentials, Ed25519 keys, SDP or ICE candidates.
-  authLog(event, id, reason = "") {
+  authLog(event, id, reason = "", check = "") {
     if (event !== "rejected" && this.env?.DEBUG_LOGIN !== "1") return;
     const kind = !id ? "new" : SESSION_ID.test(id) ? "viewer" :
       validName(id) ? "device" : "invalid";
     const detail = {event, kind, reason};
+    // Optional private diagnostic classification, never sent to clients.
+    // Do not record IDs, password values, hashes, keys, or network addresses.
+    if (check && this.env?.DEBUG_LOGIN === "1") detail.check = check;
     if (event === "rejected") console.warn("redesk.auth", detail);
     else console.info("redesk.auth", detail);
   }
-  denyLogin(socket, id, reason) {
-    this.authLog("rejected", id, reason);
+  denyLogin(socket, id, reason, check = "") {
+    this.authLog("rejected", id, reason, check);
     reject(socket, reason, "login");
   }
   account(id) {
@@ -172,7 +178,8 @@ export class SignalHub {
   }
   recordJoinFailure(id) {
     const row=this.ctx.storage.sql.exec("SELECT failures,locked_until FROM join_throttle WHERE id=?",id).toArray()[0];
-    const count=(row?.locked_until>now()?row.failures:0)+1;
+    const count=row?.locked_until && row.locked_until<=now()
+      ? 1 : (row?.failures ?? 0)+1;
     const until=count>=6?now()+300:0;
     this.ctx.storage.sql.exec(
       "INSERT INTO join_throttle(id,failures,locked_until) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET failures=excluded.failures,locked_until=excluded.locked_until",
@@ -278,16 +285,23 @@ export class SignalHub {
       // The signed challenge binds this temporary session to that device key.
       const parent = ownerId(id);
       const row = this.account(parent);
-      if (!row || row.public_key !== state.key || password || presented.includes("@")) {
-        this.failure(id); this.denyLogin(socket,id,"invalid_credentials");
+      const check = !row ? "account_missing" :
+        row.public_key !== state.key ? "device_key_mismatch" :
+        (password || presented.includes("@")) ? "unexpected_password" : "";
+      if (check) {
+        this.failure(id); this.denyLogin(socket,id,"invalid_credentials",check);
         socket.close(1008,"Authentication failed"); return;
       }
       this.clearFailure(id);
     } else if (id) {
       const row = this.account(id);
-      if (!row || row.public_key !== state.key ||
-          !ctEqual(row.hash, await passwordDigest(password, row.salt))) {
-        this.failure(id); this.denyLogin(socket,id,"invalid_credentials");
+      const check = !row ? "account_missing" :
+        row.public_key !== state.key ? "device_key_mismatch" :
+        !password ? "missing_password" :
+        !ctEqual(row.hash, await passwordDigest(password, row.salt))
+          ? "password_mismatch" : "";
+      if (check) {
+        this.failure(id); this.denyLogin(socket,id,"invalid_credentials",check);
         socket.close(1008,"Authentication failed"); return;
       }
       this.clearFailure(id);
