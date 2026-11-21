@@ -1,0 +1,225 @@
+diff --git a/src/ice/ice_agent.cpp b/src/ice/ice_agent.cpp
+--- a/src/ice/ice_agent.cpp
++++ b/src/ice/ice_agent.cpp
+@@ -2,10 +2,13 @@
+ 
+ #include <glib.h>
+ 
+-#include <algorithm>
+-#include <cassert>
+-#include <utility>
+-#include <vector>
++#include <algorithm>
++#include <atomic>
++#include <cassert>
++#include <cstdlib>
++#include <string_view>
++#include <utility>
++#include <vector>
+ 
+ #include "ice_server_resolver.h"
+ #include "ice_utils.h"
+@@ -22,7 +25,69 @@
+ 
+ namespace {
+ 
+-void PreferUnscopedLocalAddresses(NiceAgent* agent) {
++// Only the stage of a libnice message is retained; the original may
++// contain network addresses and TURN authentication material.
++void TurnDiagLibniceLog(const gchar*, GLogLevelFlags, const gchar* message,
++                        gpointer) {
++  if (!message) return;
++  const std::string_view value(message);
++  const auto has = [&](const char* term) {
++    return value.find(term) != std::string_view::npos;
++  };
++  const char* stage =
++      has("conncheck") || has("conn check") || has("connectivity") ||
++              has("pair")
++          ? "ice_check"
++          : has("TURN") || has("turn") || has("allocat") || has("relay")
++                ? "turn"
++                : has("STUN") || has("stun") ? "stun" : nullptr;
++  if (!stage) return;
++  const char* outcome =
++      has("fail") || has("error") || has("timeout") || has("refused")
++          ? "failure"
++          : has("success") || has("succeed") || has("response")
++                ? "response"
++                : "progress";
++  static std::atomic<unsigned> count{0};
++  const unsigned n = count.fetch_add(1, std::memory_order_relaxed) + 1;
++  if (n <= 200 || n % 200 == 0)
++    LOG_INFO("TURN_DIAG libnice stage={} outcome={} event={} (raw details withheld)",
++             stage, outcome, n);
++}
++
++void EnableTurnDiagLibniceLog() {
++  const char* flag = std::getenv("REDESK_TURN_DIAG_ICE_LOG");
++  if (!flag || std::string_view(flag) != "1") return;
++  static const bool installed = [] {
++    g_log_set_handler("libnice", G_LOG_LEVEL_MASK, TurnDiagLibniceLog, nullptr);
++    g_log_set_handler("libnice-stun", G_LOG_LEVEL_MASK, TurnDiagLibniceLog,
++                      nullptr);
++    LOG_INFO("TURN_DIAG libnice bridge installed; set NICE_DEBUG and G_MESSAGES_DEBUG before startup");
++    return true;
++  }();
++  (void)installed;
++}
++
++void TurnDiagGatheringDone(NiceAgent* agent, guint stream, gpointer) {
++  GSList* list = nice_agent_get_local_candidates(
++      agent, stream, NICE_COMPONENT_TYPE_RTP);
++  unsigned relay4 = 0, relay6 = 0, nonrelay = 0;
++  for (GSList* item = list; item; item = item->next) {
++    const auto* candidate = static_cast<const NiceCandidate*>(item->data);
++    if (candidate->type != NICE_CANDIDATE_TYPE_RELAYED) {
++      ++nonrelay;
++      continue;
++    }
++    if (nice_address_ip_version(&candidate->addr) == 6) ++relay6;
++    else ++relay4;
++  }
++  g_slist_free_full(
++      list, reinterpret_cast<GDestroyNotify>(nice_candidate_free));
++  LOG_INFO("TURN_DIAG gathered local_relay_ipv4={} local_relay_ipv6={} nonrelay={}",
++           relay4, relay6, nonrelay);
++}
++
++void PreferUnscopedLocalAddresses(NiceAgent* agent) {
+   // Signaled candidates do not identify the peer's local interface/zone.
+   // Link-local pairs can pass initial checks but lose the reverse data or
+   // consent path on multi-interface hosts. Keep scoped IPv6 in direct_policy;
+@@ -212,8 +277,9 @@
+   on_cb_dtls_done_ = on_cb_dtls_done;
+   user_ptr_ = user_ptr;
+ 
+-  g_networking_init();
+-  exit_nice_thread_ = false;
++  EnableTurnDiagLibniceLog();
++  g_networking_init();
++  exit_nice_thread_ = false;
+ 
+   nice_thread_ = std::thread([this]() {
+     auto notify_init = [this](int status) {
+@@ -373,8 +439,11 @@
+              enable_upnp);
+ #endif
+ 
+-    g_signal_connect(agent, "candidate-gathering-done",
+-                     G_CALLBACK(on_gathering_done_), user_ptr_);
++    g_signal_connect(agent, "candidate-gathering-done",
++                     G_CALLBACK(on_gathering_done_), user_ptr_);
++    if (turn_mode_ == MiniRtcTurnMode::MiniRtcTurnForceTcp)
++      g_signal_connect(agent, "candidate-gathering-done",
++                       G_CALLBACK(TurnDiagGatheringDone), nullptr);
+     g_signal_connect(agent, "new-selected-pair",
+                      G_CALLBACK(OnNiceSelectedPairStatic), this);
+     g_signal_connect(agent, "new-candidate-full", G_CALLBACK(on_new_candidate_),
+@@ -1625,9 +1694,22 @@
+   self->DispatchIceCallback(
+       [self, agent, stream, component, local = std::string(local ? local : ""),
+        remote = std::string(remote ? remote : "")] {
+-        if (stream == self->stream_id_ && component == NICE_COMPONENT_TYPE_RTP) {
+-          NiceCandidate *selected_local = nullptr, *selected_remote = nullptr;
+-          if (!self->relay_selected_ms_ &&
++        if (stream == self->stream_id_ && component == NICE_COMPONENT_TYPE_RTP) {
++          if (self->turn_mode_ == MiniRtcTurnMode::MiniRtcTurnForceTcp) {
++            NiceCandidate *dl = nullptr, *dr = nullptr;
++            if (nice_agent_get_selected_pair(agent, stream, component, &dl, &dr) &&
++                dl && dr) {
++              LOG_INFO("TURN_DIAG selected_pair local_type={} local_family=IPv{} local_candidate_port={} remote_type={} remote_family=IPv{} remote_candidate_port={}",
++                       nice_candidate_type_to_string(dl->type),
++                       nice_address_ip_version(&dl->addr),
++                       nice_address_get_port(&dl->addr),
++                       nice_candidate_type_to_string(dr->type),
++                       nice_address_ip_version(&dr->addr),
++                       nice_address_get_port(&dr->addr));
++            }
++          }
++          NiceCandidate *selected_local = nullptr, *selected_remote = nullptr;
++          if (!self->relay_selected_ms_ &&
+               nice_agent_get_selected_pair(agent, stream, component,
+                                            &selected_local, &selected_remote) &&
+               selected_local && selected_remote &&
+diff --git a/src/ice/ice_server_resolver.h b/src/ice/ice_server_resolver.h
+--- a/src/ice/ice_server_resolver.h
++++ b/src/ice/ice_server_resolver.h
+@@ -1,9 +1,10 @@
+ #ifndef _ICE_SERVER_RESOLVER_H_
+ #define _ICE_SERVER_RESOLVER_H_
+ 
+-#include <gio/gio.h>
+-
+-#include <map>
++#include <gio/gio.h>
++
++#include <cstdlib>
++#include <map>
+ 
+ #include "ice_server_config.h"
+ #include "log.h"
+@@ -62,12 +63,29 @@
+ 
+ inline std::vector<IceServerEndpoint> ResolveTurnServerEndpoints(
+     const IceServerConfiguration& config, MiniRtcTurnMode mode) {
+-  std::map<std::string, std::vector<std::string>> hosts;
+-  std::vector<const IceServerEndpoint*> endpoints;
++  // These opt-in filters apply only to Force Relay TCP.
++  const bool diagnostics = mode == MiniRtcTurnMode::MiniRtcTurnForceTcp;
++  const char* family_env =
++      diagnostics ? std::getenv("REDESK_TURN_DIAG_FAMILY") : nullptr;
++  const char* port_env =
++      diagnostics ? std::getenv("REDESK_TURN_DIAG_PORT") : nullptr;
++  std::string family = family_env ? family_env : "";
++  std::string port = port_env ? port_env : "";
++  if (!family.empty() && family != "ipv4" && family != "ipv6") {
++    LOG_WARN("TURN_DIAG invalid family filter; expected ipv4 or ipv6");
++    family.clear();
++  }
++  if (!port.empty() && port != "3478" && port != "80") {
++    LOG_WARN("TURN_DIAG invalid port filter; expected 3478 or 80");
++    port.clear();
++  }
++  std::map<std::string, std::vector<std::string>> hosts;
++  std::vector<const IceServerEndpoint*> endpoints;
+   for (const auto& server : config.servers) {
+     if (!config.Fresh()) return {};
+-    if (!IceTurnTransportAllowed(server, mode)) continue;
+-    auto [host, inserted] = hosts.try_emplace(server.host);
++    if (!IceTurnTransportAllowed(server, mode)) continue;
++    if (!port.empty() && std::to_string(server.port) != port) continue;
++    auto [host, inserted] = hosts.try_emplace(server.host);
+     if (inserted) {
+       host->second = ResolveTurnServerAddresses(server.host);
+       size_t ipv4 = 0, ipv6 = 0;
+@@ -88,16 +106,23 @@
+        ++address) {
+     for (const auto* endpoint : endpoints) {
+       const auto& addresses = hosts.at(endpoint->host);
+-      if (address >= addresses.size()) continue;
+-      auto server = *endpoint;
++      if (address >= addresses.size()) continue;
++      const bool ipv6 = addresses[address].find(':') != std::string::npos;
++      if ((family == "ipv4" && ipv6) || (family == "ipv6" && !ipv6))
++        continue;
++      auto server = *endpoint;
+       server.host = addresses[address];
+       result.push_back(std::move(server));
+       if (result.size() == kMaxTurnEndpoints) break;
+     }
+   }
+-  return result;
+-}
+-
+-}  // namespace minirtc
++  if (diagnostics)
++    LOG_INFO("TURN_DIAG endpoint_filter family={} port={} output_endpoints={}",
++             family.empty() ? "any" : family.c_str(),
++             port.empty() ? "any" : port.c_str(), result.size());
++  return result;
++}
++
++}  // namespace minirtc
+ #endif
+ 
