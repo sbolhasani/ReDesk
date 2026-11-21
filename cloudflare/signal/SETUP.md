@@ -159,13 +159,15 @@ Run the script **without flags** to see a console menu. The menu offers:
 - Check the health of an existing Worker
 
 The browser links use Cloudflare's official *API Token Template URLs*
-(`permissionGroupKeys`). Workers Scripts and Account Settings keys use the
-symbolic names documented by Cloudflare. **Verify the form actually selects
-Account → Calls → Write before creating the token**: Cloudflare does not list
-the `calls` symbolic key in its published template reference; if the
-dashboard says the permission cannot be resolved, add Calls Write manually
-rather than creating an insufficient token. The browser remains the authority
-for permissions. No token or password is passed in the browser URL.
+(`permissionGroupKeys`) populated with account-scoped permission group IDs:
+`Calls Write` (`b711942448db4b0aace44d1312f9fdb0`),
+`Workers Scripts Write` (`e086da7e2179491d91ee5f35b3ca210a`),
+and `Account Settings Read` (`c1fde68c7bcc44588cbb6ddbc16d6480`).
+These IDs were cross-checked against a captured Cloudflare account permission
+group listing; the Cloudflare dashboard remains the final authority. Review
+the selected permissions before creating the token. If the dashboard warns
+that a permission cannot be resolved, **do not create the incomplete token**.
+No token or password is passed in the browser URL.
 
 When upgrading a known ReDesk account that already runs the signaling Worker,
 select **Configure TURN on existing Worker**. It checks `/health`, skips
