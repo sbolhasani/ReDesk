@@ -205,6 +205,37 @@ function WorkerSecret([string]$name,[string]$value) {
         throw "Wrangler could not configure $name (exit $($result.Code))."
     }
 }
+function Save-TurnRecovery([string]$id,[string]$secret) {
+    if ($id -notmatch '^[a-fA-F0-9]{32}$' -or $secret.Length -ne 64) {
+        throw "Refusing invalid TURN recovery credential."
+    }
+    if (-not (Test-Path $stateDir)) {
+        New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+    }
+    $encrypted=ConvertFrom-SecureString (ConvertTo-SecureString $secret -AsPlainText -Force)
+    [pscustomobject]@{account_id=$AccountId;uid=$id;secret_dpapi=$encrypted} |
+        ConvertTo-Json -Compress |
+        Set-Content -LiteralPath (Join-Path $stateDir "$AccountId-turn-pending.json") -Encoding UTF8
+}
+function Load-TurnRecovery {
+    $path=Join-Path $stateDir "$AccountId-turn-pending.json"
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    $entry=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    if ($entry.account_id -ne $AccountId -or $entry.uid -notmatch '^[a-fA-F0-9]{32}$') {
+        throw "Invalid TURN recovery entry; refusing to create another key."
+    }
+    try {
+        $secure=ConvertTo-SecureString $entry.secret_dpapi
+        $pointer=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try { $secret=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+    } catch {
+        throw "TURN credential recovery failed. Run as the original Windows user."
+    }
+    if ($secret.Length -ne 64) { throw "Recovered TURN secret has unexpected length." }
+    return [pscustomobject]@{uid=$entry.uid;key=$secret}
+}
+
 function Test-Turn([string]$id,[string]$secret) {
     $endpoint="https://rtc.live.cloudflare.com/v1/turn/keys/$id/credentials/generate-ice-servers"
     $args=@{Uri=$endpoint;Method="Post";Headers=@{Authorization="Bearer $secret"};ContentType="application/json";Body='{"ttl":3600}';ErrorAction="Stop"}
@@ -304,6 +335,11 @@ try {
         }
         $turnId=if($state){$state.turn_key_id}else{""}
         if ($Mode -in @("Install","Turn") -and -not $turnId) {
+            $recovered=Load-TurnRecovery
+            if ($recovered) {
+                Write-Host "Resuming a previously issued TURN key; no new key will be created." -ForegroundColor Cyan
+                $turn=$recovered
+            } else {
             # An earlier failed installer may have created a ReDesk key.
             # Realtime does not return previously created TURN secrets.
             $priorKeys=@(Cf "GET" "/accounts/$AccountId/calls/turn_keys" |
@@ -325,6 +361,10 @@ try {
                 $fields=if ($turn) { @($turn.PSObject.Properties.Name) -join "," } else { "none" }
                 throw "TURN creation response missing expected fields: $fields; UID length=$($turnId.Length); credential length=$($turnSecret.Length). Values are hidden; check Cloudflare before retrying."
             }
+            Save-TurnRecovery $turnId $turnSecret
+            }
+            $turnId=[string]$turn.uid
+            $turnSecret=if ($turn.key) { [string]$turn.key } else { [string]$turn.secret }
             Test-Turn $turnId $turnSecret
             WorkerSecret "TURN_KEY_ID" $turnId
             WorkerSecret "TURN_API_TOKEN" $turnSecret
@@ -344,6 +384,7 @@ try {
             worker_url=$url
             turn_key_id=$turnId
         } | ConvertTo-Json -Depth 4 | Set-Content -Path $statePath -Encoding UTF8
+        Remove-Item -LiteralPath (Join-Path $stateDir "$AccountId-turn-pending.json") -ErrorAction SilentlyContinue
         Write-Host "Setup completed. Signal host: $($url -replace '^https://','')/signal; port: 443" -ForegroundColor Green
         Write-Host "State path: $statePath (contains no secrets)."
     } finally { Pop-Location }
