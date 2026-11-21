@@ -1644,7 +1644,10 @@ void GuiApplication::ResetSettingsUi(bool gallery_window) {
     main->set_settings_save_error(
         main->global<ui::LanStrings>().invoke_error_message(UiText(error.what())));
   }
-  main->set_force_relay_enabled(config_center_->IsForceRelay());
+  const auto configured_turn = config_center_->GetTurnMode();
+  main->set_turn_mode_index(
+      configured_turn == ConfigCenter::TURN_MODE::FORCE_TCP ? 2 :
+      configured_turn == ConfigCenter::TURN_MODE::FORCE_UDP ? 1 : 0);
   main->set_self_hosted_enabled(enable_self_hosted_);
 #ifdef _WIN32
   // The machine setting can also be changed by the CLI or another admin.
@@ -5202,8 +5205,19 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
   config_center_->SetVideoEncodeFormat(
       static_cast<ConfigCenter::VIDEO_ENCODE_FORMAT>(
           video_encode_format_button_value_));
-  config_center_->SetForceRelay(main->get_force_relay_enabled());
-  main->set_force_relay_enabled(config_center_->IsForceRelay());
+  const int selected_turn = std::clamp(main->get_turn_mode_index(), 0, 2);
+  const auto requested_turn = selected_turn == 2
+      ? ConfigCenter::TURN_MODE::FORCE_TCP
+      : selected_turn == 1 ? ConfigCenter::TURN_MODE::FORCE_UDP
+                           : ConfigCenter::TURN_MODE::AUTO_UDP_TCP;
+  if (config_center_->SetTurnMode(requested_turn) != 0) {
+    main->set_turn_mode_index(
+        config_center_->GetTurnMode() == ConfigCenter::TURN_MODE::FORCE_TCP ? 2 :
+        config_center_->GetTurnMode() == ConfigCenter::TURN_MODE::FORCE_UDP ? 1 : 0);
+    main->set_settings_save_error(UiText(
+        localization::Literal("保存失败，请重试", localization_language_index_)));
+    return false;
+  }
 #if !defined(__OHOS__)
   bool identity_ready = true;
 #ifdef _WIN32

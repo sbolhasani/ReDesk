@@ -11135,6 +11135,54 @@
       "fr": "Vidéo reçue mais non affichée. Vérifiez le moteur de rendu.",
       "es": "Vídeo recibido, pero no se muestra. Revise el renderizador.",
       "pt-BR": "Vídeo recebido, mas não exibido. Verifique o renderizador."
+    },
+    "TURN 连接模式": {
+      "en": "TURN connection mode",
+      "zh-Hans": "TURN 连接模式",
+      "zh-Hant": "TURN 連線模式",
+      "ru": "Режим подключения TURN",
+      "ja": "TURN接続モード",
+      "ko": "TURN 연결 모드",
+      "de": "TURN-Verbindungsmodus",
+      "fr": "Mode de connexion TURN",
+      "es": "Modo de conexión TURN",
+      "pt-BR": "Modo de conexão TURN"
+    },
+    "自动（直连或中继）": {
+      "en": "Auto (P2P / Relay)",
+      "zh-Hans": "自动（直连或中继）",
+      "zh-Hant": "自動（直連或中繼）",
+      "ru": "Авто (P2P / Relay)",
+      "ja": "自動 (P2P / リレー)",
+      "ko": "자동 (P2P / 릴레이)",
+      "de": "Auto (P2P / Relay)",
+      "fr": "Auto (P2P / relais)",
+      "es": "Auto (P2P / relé)",
+      "pt-BR": "Auto (P2P / relay)"
+    },
+    "强制中继（UDP）": {
+      "en": "Force Relay (UDP)",
+      "zh-Hans": "强制中继（UDP）",
+      "zh-Hant": "強制中繼（UDP）",
+      "ru": "Только Relay (UDP)",
+      "ja": "強制リレー (UDP)",
+      "ko": "릴레이 강제 (UDP)",
+      "de": "Relay erzwingen (UDP)",
+      "fr": "Forcer le relais (UDP)",
+      "es": "Forzar relé (UDP)",
+      "pt-BR": "Forçar relay (UDP)"
+    },
+    "强制中继（TCP）": {
+      "en": "Force Relay (TCP)",
+      "zh-Hans": "强制中继（TCP）",
+      "zh-Hant": "強制中繼（TCP）",
+      "ru": "Только Relay (TCP)",
+      "ja": "強制リレー (TCP)",
+      "ko": "릴레이 강제 (TCP)",
+      "de": "Relay erzwingen (TCP)",
+      "fr": "Forcer le relais (TCP)",
+      "es": "Forzar relé (TCP)",
+      "pt-BR": "Forçar relay (TCP)"
     }
   },
   "desktop": {
@@ -12195,7 +12243,11 @@
       "已通过 TCP 中继连接",
       "连接已建立，正在确认路径",
       "尚未收到画面。请检查主机捕获与媒体传输。",
-      "已收到画面，但尚未显示。请检查渲染器。"
+      "已收到画面，但尚未显示。请检查渲染器。",
+      "TURN 连接模式",
+      "自动（直连或中继）",
+      "强制中继（UDP）",
+      "强制中继（TCP）"
     ],
     "android": [
       " · 已完成",
