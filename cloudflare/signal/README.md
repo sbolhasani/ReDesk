@@ -145,3 +145,45 @@ npm run deploy
 then connect using the numeric device ID and its displayed password. If
 signaling now succeeds but ICE still cannot connect between restrictive
 NATs, the next milestone is TURN; a Worker alone is not a media relay.
+
+## Diagnosing `invalid_credentials` without resetting identities (2026-11-21)
+
+A two-device Cloudflare test exposed a rejected **numeric host/device** login:
+`redesk.auth { event: 'rejected', kind: 'device', reason: 'invalid_credentials' }`.
+This is distinct from a transient `C-` viewer login failure. A registered ID
+can be rejected if its persisted Ed25519 device key differs from the one
+originally registered, if its saved password is missing, or if its saved
+password does not match the server's verifier. The basic client-facing reason
+intentionally remains `invalid_credentials`; never leak which credential
+failed to an unauthenticated peer.
+
+To distinguish those cases, **temporarily** add this to `wrangler.toml` and
+redeploy:
+
+```toml
+[vars]
+DEBUG_LOGIN = "1"
+```
+
+Then watch `npx wrangler tail` while reconnecting **one test client at a time**.
+A rejected login now includes a private `check` code, e.g.
+`device_key_mismatch`, `missing_password`, `password_mismatch`, or
+`unexpected_password`. These codes contain no device ID, key, hash or
+password. Compare the host/client type and `check`, not credentials.
+Remove the `[vars]` override (or change it to `DEBUG_LOGIN = "0"`) and
+redeploy when finished. **Do not delete** the local identity cache or Durable
+Object SQLite records to work around this error: such deletion breaks existing
+device identity continuity and may strand saved connections.
+
+The previous failed-attempt counter incorrectly reset to zero on every
+unlocked attempt. Both login and join counters now accumulate consecutive
+failures, lock for 5 minutes after six failures, and start over only after
+the lock has expired. Wait until the lock expires before retesting, or use
+a separate test ID. The regression test suite now includes real ephemeral
+Ed25519 signatures and the password-mismatch and key-mismatch paths.
+
+Test locally with `npm run check` before deployment; next verify two
+independent devices with the same Worker, successful authenticated login on
+both, accurate presence, password-authorized join and real ICE/P2P connection.
+A passing `/health` check proves the Worker is alive, **not** that login or
+P2P transport works.
