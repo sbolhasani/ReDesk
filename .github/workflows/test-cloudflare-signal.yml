@@ -1,0 +1,32 @@
+name: ReDesk Cloudflare signaling tests
+
+on:
+  push:
+    branches:
+      - work/redesk-cloudflare-signal-01
+    paths:
+      - 'cloudflare/signal/**'
+      - '.github/workflows/test-cloudflare-signal.yml'
+  pull_request:
+    paths:
+      - 'cloudflare/signal/**'
+      - '.github/workflows/test-cloudflare-signal.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  worker-tests:
+    name: Worker unit and protocol tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: cloudflare/signal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm run check
