@@ -503,10 +503,30 @@ std::optional<int> ParsePort(const slint::SharedString& text) {
   return port;
 }
 
-std::string ConnectionStatusText(MiniRtcConnectionStatus status, int language) {
+// Use the nominated ICE route, not the Force Relay checkbox, when reporting
+// whether a connection is direct or relayed. MiniRTC's traversal callback
+// does not expose the selected TURN server transport in Auto mode.
+std::string ConnectedPathText(MiniRtcTraversalMode route,
+                              MiniRtcTurnMode configured_turn, int language) {
+  if (route == MiniRtcTraversalMode::MiniRtcTraversalP2P)
+    return localization::Literal("P2P 直连已建立", language);
+  if (route == MiniRtcTraversalMode::MiniRtcTraversalRelay) {
+    if (configured_turn == MiniRtcTurnMode::MiniRtcTurnForceUdp)
+      return localization::Literal("已通过 UDP 中继连接", language);
+    if (configured_turn == MiniRtcTurnMode::MiniRtcTurnForceTcp)
+      return localization::Literal("已通过 TCP 中继连接", language);
+    return localization::Literal("中继连接已建立", language);
+  }
+  return localization::Literal("连接已建立，正在确认路径", language);
+}
+
+std::string ConnectionStatusText(
+    MiniRtcConnectionStatus status, int language,
+    MiniRtcTraversalMode route = MiniRtcTraversalMode::MiniRtcTraversalUnknown,
+    MiniRtcTurnMode configured_turn = MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp) {
   switch (status) {
     case MiniRtcConnectionStatus::MiniRtcConnectionConnected:
-      return localization::p2p_connected[language];
+      return ConnectedPathText(route, configured_turn, language);
     case MiniRtcConnectionStatus::MiniRtcConnectionConnecting:
       return localization::p2p_connecting[language];
     case MiniRtcConnectionStatus::MiniRtcConnectionGathering:
@@ -3726,7 +3746,8 @@ void GuiApplication::SyncConnectionDialog() {
   } else {
     text = props->lan_session_ && !props->lan_session_->error.empty()
                ? props->lan_session_->error
-               : ConnectionStatusText(status, localization_language_index_);
+               : ConnectionStatusText(status, localization_language_index_,
+                                      props->traversal_mode_.load(), props->params_.turn_mode);
   }
   if (auth.retry_after > 0) {
     char retry_text[256];
@@ -4133,19 +4154,40 @@ void GuiApplication::SyncStreamWindow() {
   const bool waiting_for_frame =
       status == MiniRtcConnectionStatus::MiniRtcConnectionConnected &&
       !(*ui_->stream)->get_has_frame();
-  // Once the peer is connected, the frame-waiting hint replaces the
-  // connection status. Keeping these states mutually exclusive also avoids a
-  // transient overlap when both properties are synchronized in one tick.
-  (*ui_->stream)
-      ->set_status_text(UiText(
-          status == MiniRtcConnectionStatus::MiniRtcConnectionConnected
-              ? std::string{}
-              : ConnectionStatusText(status, localization_language_index_)));
-  (*ui_->stream)
-      ->set_receiving_text(UiText(
-          waiting_for_frame
-              ? localization::receiving_screen[localization_language_index_]
-              : std::string{}));
+  const auto route = props->traversal_mode_.load();
+  const std::string connected_path =
+      ConnectedPathText(route, props->params_.turn_mode,
+                        localization_language_index_);
+  // ICE connected and first remote video frame received are separate states.
+  // Label the actual route while waiting, and report a stalled media path
+  // after 12 s instead of showing "Receiving screen..." indefinitely.
+  std::string receiving_text;
+  if (waiting_for_frame) {
+    receiving_text = localization::receiving_screen[localization_language_index_];
+    const int64_t started_ms = props->connected_since_ms_.load();
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (started_ms > 0 && now_ms - started_ms >= 12000) {
+      const auto video = props->received_video_stats_.Get();
+      const bool decoded = video.width > 0 && video.height > 0;
+      receiving_text = localization::Literal(
+          decoded ? "已收到画面，但尚未显示。请检查渲染器。"
+                  : "尚未收到画面。请检查主机捕获与媒体传输。",
+          localization_language_index_);
+      if (!props->first_video_wait_reported_.exchange(true)) {
+        const auto net = props->net_traffic_stats_.Load();
+        LOG_WARN("No remote screen after 12s: selected_route={} configured_turn={} "
+                 "decoded_video={} video_rtp_packets={} video_bitrate={} srtp_active={}",
+                 static_cast<int>(route), static_cast<int>(props->params_.turn_mode),
+                 decoded, net.video_inbound_stats.rtp_packet_count,
+                 net.video_inbound_stats.bitrate, net.srtp_active);
+      }
+    }
+    receiving_text += "\n" + connected_path;
+  }
+  (*ui_->stream)->set_status_text(UiText(ConnectionStatusText(
+      status, localization_language_index_, route, props->params_.turn_mode)));
+  (*ui_->stream)->set_receiving_text(UiText(receiving_text));
   (*ui_->stream)->set_mouse_control_enabled(props->control_mouse_);
   {
     std::lock_guard lock(props->privacy_status_mutex_);
@@ -4301,13 +4343,9 @@ void GuiApplication::SyncStreamWindow() {
   (*ui_->stream)
       ->set_stats_resolution(UiText(FormatResolution(props->video_width_,
                                                      props->video_height_)));
-  (*ui_->stream)
-      ->set_stats_connection_mode(
-          UiText(props->traversal_mode_ == MiniRtcTraversalMode::MiniRtcTraversalP2P
-                     ? localization::connection_mode_direct
-                           [localization_language_index_]
-                     : localization::connection_mode_relay
-                           [localization_language_index_]));
+  (*ui_->stream)->set_stats_connection_mode(UiText(
+      ConnectedPathText(props->traversal_mode_.load(), props->params_.turn_mode,
+                        localization_language_index_)));
 
   const auto fps_now = std::chrono::steady_clock::now();
   bool refresh_stats = false;
@@ -6937,9 +6975,10 @@ void GuiApplication::SyncGallery() {
     const auto online = device_presence_cache_.GetOnline(id);
     tile.online = tile.connected || online.value_or(false);
     tile.presence_known = tile.connected || online.has_value();
-    tile.status = UiText(
-        tile.connected ? tr("等待画面")
-                       : tr("未连接"));
+    tile.status = UiText(tile.connected && props
+        ? ConnectedPathText(props->traversal_mode_.load(),
+                            props->params_.turn_mode, localization_language_index_)
+        : tr("未连接"));
     const bool queued = !tile.connected && std::any_of(
         ui_->batch_operations.begin(), ui_->batch_operations.end(),
         [&](const auto& operation) {
