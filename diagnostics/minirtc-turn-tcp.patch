@@ -1,0 +1,217 @@
+diff --git a/src/ice/ice_agent.cpp b/src/ice/ice_agent.cpp
+--- a/src/ice/ice_agent.cpp
++++ b/src/ice/ice_agent.cpp
+@@ -55,13 +55,16 @@
+       username.c_str(), password.c_str(), type);
+   const char* transport = type == NICE_RELAY_TYPE_TURN_UDP ? "UDP" : "TCP";
+ 
+-  if (accepted) {
+-    LOG_DEBUG("Registered TURN/{} relay [{}:{}]", transport, address, port);
+-    return true;
+-  }
+-
+-  LOG_WARN("libnice rejected TURN/{} relay", transport);
+-  LOG_DEBUG("Rejected TURN/{} relay [{}:{}]", transport, address, port);
++  // Do not log TURN usernames/passwords or public endpoint addresses.
++  const char* family = address.find(':') != std::string::npos ? "IPv6" : "IPv4";
++  if (accepted) {
++    LOG_INFO("TURN_DIAG endpoint registered transport={} family={} port={}",
++             transport, family, port);
++    return true;
++  }
++
++  LOG_WARN("TURN_DIAG endpoint registration failed transport={} family={} port={}",
++           transport, family, port);
+   return false;
+ }
+ 
+@@ -171,8 +174,13 @@
+   nice_inited_.store(false);
+   init_failed_.store(false);
+   agent_closed_.store(false);
+-  send_disabled_.store(false);
+-  p2p_enhancement_enabled_.store(false);
++  send_disabled_.store(false);
++  dtls_diag_tx_packets_.store(0);
++  dtls_diag_tx_failures_.store(0);
++  dtls_diag_rx_packets_.store(0);
++  dtls_diag_tx_bytes_.store(0);
++  dtls_diag_rx_bytes_.store(0);
++  p2p_enhancement_enabled_.store(false);
+   relay_selected_ms_ = 0;
+   punch_remote_supported_ = false;
+   punch_retry_supported_ = false;
+@@ -395,15 +403,22 @@
+     }
+ 
+     if (IsTurnEnabled(turn_mode_)) {
+-      bool relay_registered = false;
+-      for (const auto& server :
+-           ResolveTurnServerEndpoints(ice_config_, turn_mode_)) {
+-        const auto type =
+-            server.tcp ? NICE_RELAY_TYPE_TURN_TCP : NICE_RELAY_TYPE_TURN_UDP;
+-        relay_registered |=
+-            AddTurnRelay(agent, stream_id_, server.host, server.port,
+-                         server.username, server.password, type);
+-      }
++      bool relay_registered = false;
++      const auto endpoints = ResolveTurnServerEndpoints(ice_config_, turn_mode_);
++      size_t tcp_endpoints = 0;
++      size_t udp_endpoints = 0;
++      for (const auto& server : endpoints) {
++        if (server.tcp) ++tcp_endpoints;
++        else ++udp_endpoints;
++        const auto type =
++            server.tcp ? NICE_RELAY_TYPE_TURN_TCP : NICE_RELAY_TYPE_TURN_UDP;
++        relay_registered |=
++            AddTurnRelay(agent, stream_id_, server.host, server.port,
++                         server.username, server.password, type);
++      }
++      LOG_INFO("TURN_DIAG resolution requested_mode={} tcp_endpoints={} udp_endpoints={} any_registered={}",
++               TurnModeName(turn_mode_), tcp_endpoints, udp_endpoints,
++               relay_registered);
+ 
+       if (!relay_registered || !ice_config_.Fresh()) {
+         LOG_WARN("No TURN endpoint could be registered from signaling configuration");
+@@ -1102,9 +1117,14 @@
+   IceAgent* self = reinterpret_cast<IceAgent*>(BIO_get_data(b));
+   if (!self || !buf || len <= 0) return -1;
+   BIO_clear_retry_flags(b);
+-  int r = self->Send(buf, (size_t)len);
+-  if (r == 0) return len;
+-  return -1;
++  int r = self->Send(buf, (size_t)len);
++  if (r == 0) {
++    self->dtls_diag_tx_packets_.fetch_add(1);
++    self->dtls_diag_tx_bytes_.fetch_add(static_cast<uint64_t>(len));
++    return len;
++  }
++  self->dtls_diag_tx_failures_.fetch_add(1);
++  return -1;
+ }
+ 
+ int IceAgent::bio_nice_read(BIO* b, char* buf, int len) {
+@@ -1220,9 +1240,11 @@
+   else
+     SSL_set_accept_state(ssl_);
+ 
+-  dtls_started_ = true;
+-
+-  ERR_clear_error();
++  dtls_started_ = true;
++  LOG_INFO("TURN_DIAG DTLS start role={} turn_mode={}",
++           is_client ? "client" : "server", TurnModeName(turn_mode_));
++
++  ERR_clear_error();
+   int ret = SSL_do_handshake(ssl_);
+   if (ret == 1) {
+     return CompleteDtlsHandshake() ? 0 : -1;
+@@ -1235,8 +1257,12 @@
+         [this](DtlsHandshakeTimer::Failure failure) {
+           if (destroyed_ || send_disabled_ || dtls_handshake_done_) return;
+           if (failure == DtlsHandshakeTimer::Failure::Deadline) {
+-            LOG_ERROR("DTLS handshake timed out after {} ms, failing the connection",
+-                      kDtlsHandshakeTimeoutMs);
++            LOG_ERROR("DTLS handshake timed out after {} ms, failing the connection",
++                      kDtlsHandshakeTimeoutMs);
++            LOG_INFO("TURN_DIAG DTLS timeout tx_packets={} tx_bytes={} tx_failures={} rx_packets={} rx_bytes={}",
++                     dtls_diag_tx_packets_.load(), dtls_diag_tx_bytes_.load(),
++                     dtls_diag_tx_failures_.load(), dtls_diag_rx_packets_.load(),
++                     dtls_diag_rx_bytes_.load());
+           } else {
+             LOG_ERROR("DTLS handshake retransmission failed");
+             log_openssl_errors();
+@@ -1408,9 +1434,13 @@
+              // DTLS/SRTP/business.
+   }
+ 
+-  const bool looks_dtls =
+-      IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
+-  const bool use_dtls = ShouldUseDtls();
++  const bool looks_dtls =
++      IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
++  if (looks_dtls) {
++    dtls_diag_rx_packets_.fetch_add(1);
++    dtls_diag_rx_bytes_.fetch_add(static_cast<uint64_t>(size));
++  }
++  const bool use_dtls = ShouldUseDtls();
+   if (use_dtls && looks_dtls) {
+     if (dtls_failed_ || send_disabled_ || destroyed_) return;
+     if (dtls_started_) {
+@@ -1542,10 +1572,14 @@
+   MaybeStartDtls();
+   // Late ICE state changes must not revive a failed DTLS connection.
+   if (dtls_failed_) return;
+-  if (state == NICE_COMPONENT_STATE_FAILED) {
+-    dtls_failed_ = true;
+-    dtls_timer_.Stop();
+-  }
++  if (state == NICE_COMPONENT_STATE_FAILED) {
++    LOG_INFO("TURN_DIAG ICE failed dtls_started={} dtls_complete={} tx_packets={} tx_failures={} rx_packets={}",
++             dtls_started_.load(), dtls_handshake_done_.load(),
++             dtls_diag_tx_packets_.load(), dtls_diag_tx_failures_.load(),
++             dtls_diag_rx_packets_.load());
++    dtls_failed_ = true;
++    dtls_timer_.Stop();
++  }
+   if (state == NICE_COMPONENT_STATE_READY) MaybeStartPunch();
+   if (on_state_changed_) {
+     on_state_changed_(agent_, stream_id, component_id, state, user_ptr_);
+@@ -1572,8 +1606,12 @@
+   dtls_handshake_done_ = true;
+   dtls_timer_.Stop();
+   MaybeStartPunch();
+-  LOG_INFO("DTLS peer fingerprint verified");
+-  if (on_cb_dtls_done_) on_cb_dtls_done_(user_ptr_);
++  LOG_INFO("DTLS peer fingerprint verified");
++  LOG_INFO("TURN_DIAG DTLS complete tx_packets={} tx_bytes={} tx_failures={} rx_packets={} rx_bytes={}",
++           dtls_diag_tx_packets_.load(), dtls_diag_tx_bytes_.load(),
++           dtls_diag_tx_failures_.load(), dtls_diag_rx_packets_.load(),
++           dtls_diag_rx_bytes_.load());
++  if (on_cb_dtls_done_) on_cb_dtls_done_(user_ptr_);
+   return true;
+ }
+ 
+diff --git a/src/ice/ice_agent.h b/src/ice/ice_agent.h
+--- a/src/ice/ice_agent.h
++++ b/src/ice/ice_agent.h
+@@ -195,8 +195,14 @@
+   std::atomic<bool> dtls_started_{false};
+   std::atomic<bool> dtls_handshake_done_{false};
+   std::atomic<bool> dtls_peer_verified_{false};
+-  std::atomic<bool> dtls_failed_{false};
+-  // A peer that never answers the DTLS handshake used to leave the session
++  std::atomic<bool> dtls_failed_{false};
++  // Temporary TURN/TCP diagnostic counters; no credentials or packet payloads.
++  std::atomic<uint64_t> dtls_diag_tx_packets_{0};
++  std::atomic<uint64_t> dtls_diag_tx_failures_{0};
++  std::atomic<uint64_t> dtls_diag_rx_packets_{0};
++  std::atomic<uint64_t> dtls_diag_tx_bytes_{0};
++  std::atomic<uint64_t> dtls_diag_rx_bytes_{0};
++  // A peer that never answers the DTLS handshake used to leave the session
+   // hanging in CONNECTED forever, so the deadline fails it instead.
+   static constexpr int64_t kDtlsHandshakeTimeoutMs = 20000;
+   DtlsHandshakeTimer dtls_timer_;
+diff --git a/src/ice/ice_server_resolver.h b/src/ice/ice_server_resolver.h
+--- a/src/ice/ice_server_resolver.h
++++ b/src/ice/ice_server_resolver.h
+@@ -68,8 +68,17 @@
+     if (!config.Fresh()) return {};
+     if (!IceTurnTransportAllowed(server, mode)) continue;
+     auto [host, inserted] = hosts.try_emplace(server.host);
+-    if (inserted) host->second = ResolveTurnServerAddresses(server.host);
+-    endpoints.push_back(&server);
++    if (inserted) {
++      host->second = ResolveTurnServerAddresses(server.host);
++      size_t ipv4 = 0, ipv6 = 0;
++      for (const auto& ip : host->second) {
++        if (ip.find(':') != std::string::npos) ++ipv6;
++        else ++ipv4;
++      }
++      LOG_INFO("TURN_DIAG DNS resolved ipv4={} ipv6={} (hostname/address withheld)",
++               ipv4, ipv6);
++    }
++    endpoints.push_back(&server);
+   }
+   if (!config.Fresh()) return {};
+   std::vector<IceServerEndpoint> result;
