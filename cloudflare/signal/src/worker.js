@@ -12,6 +12,12 @@ const CHALLENGE_MS = 30_000;
 const SIGNATURE_CHALLENGE_MS = 10_000; // CrossDesk single-use proof deadline.
 const MAX_CONNECTIONS = 200; // Single hub is for initial testing, not scaling.
 const ICE_LIFETIME = 1800;
+const TURN_TTL_SECONDS = 6 * 60 * 60;
+const TURN_ISSUE_TIMEOUT_MS = 8000;
+// MiniRTC's current libnice backend accepts stun:/turn: but not turns:.
+// Cloudflare includes turns: URLs in its response; keep only compatible
+// cloudflare.com TURN/UDP and TURN/TCP endpoints, never forward long-term keys.
+const SUPPORTED_CF_TURN = /^turn:turn\.cloudflare\.com:(?:3478|80|443)\?transport=(?:udp|tcp)$/;
 const ID = /^\d{9}$/;
 // MiniRTC creates a second signaling connection for each outgoing session,
 // using C-<own ID>. It must prove possession of the registered device key.
@@ -81,7 +87,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
-      return Response.json({ok:true, service:"ReDesk signaling", protocol:"crossdesk-minirtc-v1", media_relay:false});
+      return Response.json({ok:true, service:"ReDesk signaling",
+        protocol:"crossdesk-minirtc-v1", media_relay:false,
+        turn_configured:Boolean(env.TURN_KEY_ID && env.TURN_API_TOKEN)});
     }
     if (url.pathname !== "/signal" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Not found", {status:404});
@@ -186,6 +194,55 @@ export class SignalHub {
     const row=this.ctx.storage.sql.exec("SELECT locked_until FROM join_throttle WHERE id=?",id).toArray()[0];
     return Boolean(row && row.locked_until > now());
   }
+  async connectionIce() {
+    const keyId = this.env?.TURN_KEY_ID;
+    const apiToken = this.env?.TURN_API_TOKEN;
+    if (!keyId && !apiToken) return iceSnapshot();
+    if (!/^[0-9a-f]{32}$/i.test(keyId ?? "") || !apiToken) {
+      console.warn("redesk.turn", {event:"credential_unavailable",reason:"configuration"});
+      return iceSnapshot();
+    }
+    const expiresAt = now() + TURN_TTL_SECONDS - 60;
+    try {
+      // Cloudflare Realtime credentials are issued per authorized connection.
+      // TURN_KEY_ID is public metadata; TURN_API_TOKEN is a Worker Secret.
+      const response = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${keyId}/credentials/generate-ice-servers`,
+        {method:"POST",headers:{
+          Authorization:`Bearer ${apiToken}`,
+          "Content-Type":"application/json"
+        },body:JSON.stringify({ttl:TURN_TTL_SECONDS}),
+          signal:AbortSignal.timeout(TURN_ISSUE_TIMEOUT_MS)});
+      if (!response.ok) throw new Error("provider_response");
+      const data = await response.json();
+      if (!Array.isArray(data?.iceServers)) throw new Error("invalid_provider_data");
+      const servers = [{urls:["stun:stun.cloudflare.com:3478"]}];
+      for (const entry of data.iceServers) {
+        if (!entry || typeof entry !== "object") continue;
+        const urls = (Array.isArray(entry.urls) ? entry.urls : [entry.urls])
+          .filter(url => typeof url === "string" && SUPPORTED_CF_TURN.test(url));
+        if (!urls.length) continue;
+        if (typeof entry.username !== "string" || !entry.username ||
+            entry.username.length > 512 || entry.username.includes("\0") ||
+            typeof entry.credential !== "string" || !entry.credential ||
+            entry.credential.length > 512 || entry.credential.includes("\0"))
+          throw new Error("invalid_provider_data");
+        servers.push({urls,username:entry.username,credential:entry.credential,
+          expires_at:expiresAt});
+      }
+      if (servers.length < 2) throw new Error("unsupported_provider_urls");
+      return {version:1,id:crypto.randomUUID(),expires_at:expiresAt,servers};
+    } catch (error) {
+      // Keep direct P2P working if the external TURN API is unavailable;
+      // forced-TURN mode will correctly reject the STUN-only snapshot.
+      // Do not log API responses, bearer tokens, credentials or peer IDs.
+      const reason = error?.message === "provider_response" ? "provider_response" :
+        error?.message === "unsupported_provider_urls" ? "unsupported_urls" :
+        error?.message === "invalid_provider_data" ? "invalid_data" : "request_failed";
+      console.warn("redesk.turn",{event:"credential_unavailable",reason});
+      return iceSnapshot();
+    }
+  }
   recordJoinFailure(id) {
     const row=this.ctx.storage.sql.exec("SELECT failures,locked_until FROM join_throttle WHERE id=?",id).toArray()[0];
     const count=row?.locked_until && row.locked_until<=now()
@@ -241,7 +298,7 @@ export class SignalHub {
     } else if (msg.type === "disconnect_peer") {
       this.leave(user, msg.transmission_id);
     } else if (ROOM_FIELDS.has(msg.type)) {
-      this.relay(socket, user, msg);
+      await this.relay(socket, user, msg);
     } else if (msg.type === "session_report") {
       // No authorization is derived from client session reports.
     } else if (msg.type === "client_info" || msg.type === "ping") {
@@ -400,7 +457,12 @@ export class SignalHub {
     this.ctx.storage.sql.exec(
       "INSERT INTO sessions(token,host,guest,created) VALUES(?,?,?,?)",
       ticket,target,user,now());
-    const ice=iceSnapshot();
+    const ice=await this.connectionIce();
+    // The host can disconnect while the external provider issues credentials.
+    if (!this.online(target) || this.socket(user) !== socket) {
+      this.ctx.storage.sql.exec("DELETE FROM sessions WHERE token=?",ticket);
+      roomFail("remote_unavailable"); return;
+    }
     // Host and viewer receive the same canonical transmission ID (without its
     // secret), plus the *other* endpoint's authenticated identity.
     const sessionTicket = {type:"session_ticket",transmission_id:target,
@@ -426,7 +488,7 @@ export class SignalHub {
       "SELECT token FROM sessions WHERE host=? AND ((host=? AND guest=?) OR (host=? AND guest=?)) LIMIT 1",
       transmission,user,target,target,user).toArray()[0] ?? null;
   }
-  relay(socket,user,msg) {
+  async relay(socket,user,msg) {
     const target=msg.remote_user_id,transmission=identifier(msg.transmission_id ?? "");
     if (!validPeerName(target) || !validName(transmission) ||
         !this.room(user,target,transmission)) {reject(socket,"not_in_session");return;}
@@ -443,8 +505,11 @@ export class SignalHub {
     // The host received its separate snapshot in user_join_transmission.
     // Do not trust sender-provided ICE/server credentials or sender identity.
     const routed = {...msg,user_id:user,remote_user_id:user,transmission_id:transmission};
-    if (msg.type === "offer") routed.ice = iceSnapshot();
-    else delete routed.ice;
+    if (msg.type === "offer") {
+      routed.ice = await this.connectionIce();
+      // A session may be revoked while waiting for Cloudflare Realtime.
+      if (this.socket(user) !== socket || !this.room(user,target,transmission)) return;
+    } else delete routed.ice;
     this.send(target,routed);
   }
   leave(user,rawTarget) {
