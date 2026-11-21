@@ -304,101 +304,27 @@ try {
         }
         $turnId=if($state){$state.turn_key_id}else{""}
         if ($Mode -in @("Install","Turn") -and -not $turnId) {
-            # A previous failed attempt may already have created a key. Do
-            # not create another or delete a live key without user consent.
+            # An earlier failed installer may have created a ReDesk key.
+            # Realtime does not return previously created TURN secrets.
             $priorKeys=@(Cf "GET" "/accounts/$AccountId/calls/turn_keys" |
                 Where-Object { $_.name -eq "redesk-signal" })
             if ($priorKeys.Count -gt 0) {
-                Write-Host "Found an existing ReDesk TURN key; Cloudflare does not return its secret again." -ForegroundColor Yellow
-                Write-Host "Check Cloudflare Realtime to confirm these keys are unused."
-                $decision=Read-Host "Type ROTATE to delete these named keys and create one replacement, or Enter to stop"
-                if ($decision -cne "ROTATE") { throw "Stopped; no TURN keys were changed." }
+                Write-Host "Existing ReDesk TURN keys found. Confirm they are unused before rotation." -ForegroundColor Yellow
+                $decision=Read-Host "Type ROTATE to replace only these named keys; press Enter to stop"
+                if ($decision -cne "ROTATE") { throw "Stopped; no TURN keys changed." }
                 foreach ($oldKey in $priorKeys) {
-                    if ($oldKey.uid -notmatch '^[a-fA-F0-9]{32}
-            Test-Turn $turnId $turnSecret
-            WorkerSecret "TURN_KEY_ID" $turnId
-            WorkerSecret "TURN_API_TOKEN" $turnSecret
-            Write-Host "TURN Secrets installed." -ForegroundColor Green
-        } elseif ($Mode -eq "Update") {
-            Write-Host "Keeping existing TURN Key and Worker Secrets (no rotation)."
-        }
-        $url=Health $url
-        if ($Mode -in @("Install","Turn")) {
-            $h=Invoke-RestMethod -Uri "$url/health" -TimeoutSec 15
-            if(-not $h.turn_configured){throw "TURN secrets are not yet visible to the deployed Worker."}
-        }
-        if(-not(Test-Path $stateDir)){New-Item -Path $stateDir -ItemType Directory -Force | Out-Null}
-        [pscustomobject]@{
-            account_id=$AccountId
-            worker_name=$workerName
-            worker_url=$url
-            turn_key_id=$turnId
-        } | ConvertTo-Json -Depth 4 | Set-Content -Path $statePath -Encoding UTF8
-        Write-Host "Setup completed. Signal host: $($url -replace '^https://','')/signal; port: 443" -ForegroundColor Green
-        Write-Host "State path: $statePath (contains no secrets)."
-    } finally { Pop-Location }
-} finally {
-    $apiToken=$null
-    $turnSecret=$null
-    if ($null -ne $oldCloudToken) { $env:CLOUDFLARE_API_TOKEN=$oldCloudToken }
-    else { Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue }
-    if ($null -ne $oldCloudAccount) { $env:CLOUDFLARE_ACCOUNT_ID=$oldCloudAccount }
-    else { Remove-Item Env:CLOUDFLARE_ACCOUNT_ID -ErrorAction SilentlyContinue }
-    if ($null -ne $oldCloudKey) { $env:CLOUDFLARE_API_KEY=$oldCloudKey }
-    else { Remove-Item Env:CLOUDFLARE_API_KEY -ErrorAction SilentlyContinue }
-    if ($null -ne $oldCloudEmail) { $env:CLOUDFLARE_EMAIL=$oldCloudEmail }
-    else { Remove-Item Env:CLOUDFLARE_EMAIL -ErrorAction SilentlyContinue }
-}
-) { throw "Invalid key ID. No deletion performed." }
+                    if ($oldKey.uid -notmatch '^[a-fA-F0-9]{32}$') { throw "Invalid key ID; nothing deleted." }
                     $null=Cf "DELETE" "/accounts/$AccountId/calls/turn_keys/$($oldKey.uid)"
                 }
             }
             Write-Host "Creating a dedicated Cloudflare Realtime TURN Key..."
             $turn=Cf "POST" "/accounts/$AccountId/calls/turn_keys" @{name="redesk-signal"}
-            $candidate=if ($turn.key) { [string]$turn.key } else { [string]$turn.secret }
-            if ($turn.uid -notmatch '^[a-fA-F0-9]{32}
-            Test-Turn $turnId $turnSecret
-            WorkerSecret "TURN_KEY_ID" $turnId
-            WorkerSecret "TURN_API_TOKEN" $turnSecret
-            Write-Host "TURN Secrets installed." -ForegroundColor Green
-        } elseif ($Mode -eq "Update") {
-            Write-Host "Keeping existing TURN Key and Worker Secrets (no rotation)."
-        }
-        $url=Health $url
-        if ($Mode -in @("Install","Turn")) {
-            $h=Invoke-RestMethod -Uri "$url/health" -TimeoutSec 15
-            if(-not $h.turn_configured){throw "TURN secrets are not yet visible to the deployed Worker."}
-        }
-        if(-not(Test-Path $stateDir)){New-Item -Path $stateDir -ItemType Directory -Force | Out-Null}
-        [pscustomobject]@{
-            account_id=$AccountId
-            worker_name=$workerName
-            worker_url=$url
-            turn_key_id=$turnId
-        } | ConvertTo-Json -Depth 4 | Set-Content -Path $statePath -Encoding UTF8
-        Write-Host "Setup completed. Signal host: $($url -replace '^https://','')/signal; port: 443" -ForegroundColor Green
-        Write-Host "State path: $statePath (contains no secrets)."
-    } finally { Pop-Location }
-} finally {
-    $apiToken=$null
-    $turnSecret=$null
-    if ($null -ne $oldCloudToken) { $env:CLOUDFLARE_API_TOKEN=$oldCloudToken }
-    else { Remove-Item Env:CLOUDFLARE_API_TOKEN -ErrorAction SilentlyContinue }
-    if ($null -ne $oldCloudAccount) { $env:CLOUDFLARE_ACCOUNT_ID=$oldCloudAccount }
-    else { Remove-Item Env:CLOUDFLARE_ACCOUNT_ID -ErrorAction SilentlyContinue }
-    if ($null -ne $oldCloudKey) { $env:CLOUDFLARE_API_KEY=$oldCloudKey }
-    else { Remove-Item Env:CLOUDFLARE_API_KEY -ErrorAction SilentlyContinue }
-    if ($null -ne $oldCloudEmail) { $env:CLOUDFLARE_EMAIL=$oldCloudEmail }
-    else { Remove-Item Env:CLOUDFLARE_EMAIL -ErrorAction SilentlyContinue }
-}
- -or $candidate.Length -ne 64) {
+            $turnId=[string]$turn.uid
+            $turnSecret=if ($turn.key) { [string]$turn.key } else { [string]$turn.secret }
+            if ($turnId -notmatch '^[a-fA-F0-9]{32}$' -or $turnSecret.Length -ne 64) {
                 $fields=if ($turn) { @($turn.PSObject.Properties.Name) -join "," } else { "none" }
-                $keyLength=if ($turn.key) { ([string]$turn.key).Length } else { 0 }
-                $secretLength=if ($turn.secret) { ([string]$turn.secret).Length } else { 0 }
-                throw "TURN API response invalid; fields: $fields, key_length: $keyLength, secret_length: $secretLength. Check Cloudflare key list before retrying."
+                throw "TURN creation response missing expected fields: $fields; UID length=$($turnId.Length); credential length=$($turnSecret.Length). Values are hidden; check Cloudflare before retrying."
             }
-            $turnId=$turn.uid
-            $turnSecret=$candidate
             Test-Turn $turnId $turnSecret
             WorkerSecret "TURN_KEY_ID" $turnId
             WorkerSecret "TURN_API_TOKEN" $turnSecret
