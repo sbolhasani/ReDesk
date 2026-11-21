@@ -225,7 +225,7 @@ try {
         if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) { throw "Node.js 20+ is required." }
     }
     if ([int](& node -p "process.versions.node.split('.')[0]") -lt 20) { throw "Node.js 20+ required." }
-    if ($Mode -in @("Install","Turn") -or $DeployAuth -eq "Token") {
+    if ($Mode -in @("Install","Update","Turn") -or $DeployAuth -eq "Token") {
         $apiToken=$env:CLOUDFLARE_API_TOKEN
         if (-not $apiToken) { $apiToken=Read-Private "Cloudflare API Token (Workers Scripts Edit + Calls Write)" }
         if (-not $apiToken) { throw "API Token required." }
@@ -286,16 +286,24 @@ try {
             $env:CLOUDFLARE_API_TOKEN=$apiToken
             Write-Host "Deploy authentication: scoped API Token."
         }
-        Write-Host "Deploying Worker and Durable Object migration (without deleting existing data)..."
-        $deployment=Run-Wrangler @("deploy")
-        if ($deployment.Code -ne 0) {
-            Explain-WranglerError $deployment
-            throw "wrangler deploy failed. The token may lack Workers Scripts Edit or Account Settings Read. Try -DeployAuth Wrangler if you have already run wrangler login."
+        if ($Mode -eq "Turn") {
+            # TURN-only operation cannot damage the running Worker or its DO.
+            $url=if($WorkerUrl){$WorkerUrl}elseif($state){$state.worker_url}else{""}
+            if(-not $url){$url=Read-Host "Existing ReDesk Worker URL (https://...workers.dev)"}
+            $url=Health $url
+            Write-Host "TURN-only setup: skipping Worker deployment."
+        } else {
+            Write-Host "Deploying Worker and Durable Object migration (without deleting existing data)..."
+            $deployment=Run-Wrangler @("deploy")
+            if ($deployment.Code -ne 0) {
+                Explain-WranglerError $deployment
+                throw "wrangler deploy failed. Check Workers Scripts Edit/Account Settings Read, or choose -DeployAuth Wrangler."
+            }
+            $match=[regex]::Match(($deployment.Lines -join [Environment]::NewLine),'https://[a-zA-Z0-9.-]+\.workers\.dev')
+            $url=if($WorkerUrl){$WorkerUrl}elseif($match.Success){$match.Value}elseif($state){$state.worker_url}else{""}
         }
-        $match=[regex]::Match(($deployment.Lines -join [Environment]::NewLine),'https://[a-zA-Z0-9.-]+\.workers\.dev')
-        $url=if($WorkerUrl){$WorkerUrl}elseif($match.Success){$match.Value}elseif($state){$state.worker_url}else{""}
         $turnId=if($state){$state.turn_key_id}else{""}
-        if ($Mode -eq "Install" -and -not $turnId) {
+        if ($Mode -in @("Install","Turn") -and -not $turnId) {
             Write-Host "Creating a dedicated Cloudflare Realtime TURN Key..."
             $turn=Cf "POST" "/accounts/$AccountId/calls/turn_keys" @{name="redesk-signal"}
             if ($turn.uid -notmatch '^[a-fA-F0-9]{32}$' -or -not $turn.key) { throw "TURN Key creation returned incomplete data." }
@@ -309,7 +317,7 @@ try {
             Write-Host "Keeping existing TURN Key and Worker Secrets (no rotation)."
         }
         $url=Health $url
-        if ($Mode -eq "Install") {
+        if ($Mode -in @("Install","Turn")) {
             $h=Invoke-RestMethod -Uri "$url/health" -TimeoutSec 15
             if(-not $h.turn_configured){throw "TURN secrets are not yet visible to the deployed Worker."}
         }
