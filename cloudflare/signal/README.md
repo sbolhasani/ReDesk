@@ -261,3 +261,26 @@ npx wrangler tail
 Then relaunch both ReDesk devices. Validate independent signed login and
 online presence before testing one device's password-protected connection
 to the other. Disable `DEBUG_LOGIN` once diagnosis is finished.
+
+## MiniRTC P2P failure: missing ICE configuration in SDP offer (2026-11-21)
+
+CrossDesk upstream `SignalNegotiation::offer` calls
+`AddConnectionIceConfig(message, remote_user_id)`. MiniRTC
+`PeerConnection::BuildConnectionInfo` requires an `ice` object on
+the *answerer's incoming offer* whenever login advertises
+`ice_config_version: 1`. ReDesk's Worker already included `ice`
+on the host's `user_join_transmission`, but forgot it on the forwarded
+`offer`: the viewer would reject the offer before starting ICE, resulting
+in `P2P Failed`. Worker now issues a new ICE snapshot on each forwarded
+offer without changing the existing SDP/candidate protocol. A regression
+assertion checks the offer shape. This repair requires only Worker deployment,
+not a ReDesk desktop rebuild. It does not address restrictive NAT topologies
+that require a TURN relay.
+
+On both computers relaunch ReDesk after updating the Worker, then connect
+using the host's *current* password. Watch for the transition beyond P2P
+Connecting; if it still fails, gather MiniRTC client log lines around
+`Received remote offer`, `Using per-connection ICE configuration`,
+`Reject invalid or expired per-connection ICE configuration`, and
+`Ice failed` before changing STUN/TURN settings. The existing device-ID
+and Ed25519 identity must be preserved.
