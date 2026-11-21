@@ -1,4 +1,6 @@
-# Sets ONLY the current PowerShell process environment; no persistent Windows changes.
+# Dot-source this script to set the caller PowerShell environment.
+# Example: . .\scripts\set-minirtc-turn-test.ps1 -Family ipv4 -Port 3478
+# Running as a separate powershell.exe process will not modify the parent shell.
 param(
     [ValidateSet('any', 'ipv4', 'ipv6')]
     [string]$Family = 'any',
