@@ -181,3 +181,29 @@ Avoid pasting raw bearer tokens, full API responses, or local Wrangler
 credential files into support conversations.
 
 Documentation: https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
+
+## Recovering from TURN Key creation that returned "incomplete data"
+
+Cloudflare's creation endpoint returns a one-time 64-character `key` and a
+32-character `uid` when fully successful. The previous installer called the
+endpoint but could reject a nonmatching response, potentially leaving a
+`redesk-signal` key without a saved secret. The corrected installer:
+
+- Checks existing named TURN keys before issuing another creation request
+- Accepts `key` and `secret` response property aliases
+- Saves the returned one-time secret encrypted using the **current Windows
+  user's DPAPI** before validating TURN credentials or uploading Worker secrets
+- Recovers from a subsequent interrupted setup using the same Windows user
+- Never silently deletes an earlier TURN key; if an unusable named key exists,
+  requires explicit `ROTATE` confirmation before deleting it and creating
+  a replacement
+- Reports only response field names and lengths if the API unexpectedly omits
+  a credential; it does not print secret values
+
+Do not rotate keys still in use by other Workers. The DPAPI recovery file is
+`%LOCALAPPDATA%\ReDesk\Cloudflare\<account-id>-turn-pending.json`;
+it is deleted once health verification and state saving succeed.
+
+The unrelated Android/iOS GitHub Actions PR builds were disabled to avoid
+starting expensive builds on each Cloudflare feature-branch commit. Existing
+queued jobs might still appear until GitHub finishes or cancels them.
