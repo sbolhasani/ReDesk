@@ -8,7 +8,7 @@ Examples:
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet("Auto","Install","Update","Check")] [string]$Mode="Auto",
+    [ValidateSet("Auto","Install","Update","Turn","Check","CreateToken")] [string]$Mode="Auto",
     [string]$AccountId="",
     [switch]$AdoptExistingWorker,
     [ValidateSet("Auto","Wrangler","Token")] [string]$DeployAuth="Auto",
@@ -27,6 +27,66 @@ $oldCloudToken=$env:CLOUDFLARE_API_TOKEN
 $oldCloudAccount=$env:CLOUDFLARE_ACCOUNT_ID
 $oldCloudKey=$env:CLOUDFLARE_API_KEY
 $oldCloudEmail=$env:CLOUDFLARE_EMAIL
+
+
+# Cloudflare API Token template URL format is documented by Cloudflare:
+# https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
+# Account-owned tokens accept exact permission-group IDs, unlike user tokens.
+# The documented group IDs can be resolved in Cloudflare's permission-groups API.
+function Get-TokenTemplateUrl([string]$Purpose) {
+    # Calls Write, Workers Scripts Write, Account Settings Read.
+    # IDs are Cloudflare permission group IDs; account-token URLs accept IDs.
+    $callsWrite="b711942448db4b0aace44d1312f9fdb0"
+    $workersWrite="e086da7e2179491d91ee5f35b3ca210a"
+    $accountRead="c1fde68c7bcc44588cbb6ddbc16d6480"
+    $perms=@(@{key=$callsWrite;type="edit"})
+    $name="ReDesk TURN Setup"
+    if ($Purpose -eq "Full") {
+        $perms+=@{key=$workersWrite;type="edit"}
+        $perms+=@{key=$accountRead;type="read"}
+        $name="ReDesk Backend Setup"
+    }
+    $json=ConvertTo-Json -InputObject @($perms) -Depth 4 -Compress
+    $encoded=[Uri]::EscapeDataString($json)
+    return "https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=$encoded&name=$([Uri]::EscapeDataString($name))"
+}
+function Open-TokenTemplate([string]$Purpose) {
+    $url=Get-TokenTemplateUrl $Purpose
+    Write-Host ""
+    Write-Host "Opening Cloudflare's official account API-token creation form..."
+    if ($Purpose -eq "Turn") {
+        Write-Host "Required permission: Account / Calls / Write."
+    } else {
+        Write-Host "Required permissions: Account / Calls / Write, Workers Scripts / Write, Account Settings / Read."
+    }
+    Write-Host "Review the preselected permissions and account in Cloudflare before creating."
+    Write-Host "Cloudflare must still show the token once; copy it privately into this setup tool."
+    Write-Host $url
+    try { Start-Process -FilePath $url -ErrorAction Stop | Out-Null }
+    catch { Write-Host "Could not open browser. Copy the printed URL instead." }
+}
+function Show-SetupMenu {
+    while ($true) {
+        Write-Host ""
+        Write-Host "========== ReDesk Cloudflare Setup ==========" -ForegroundColor Cyan
+        Write-Host "1. Install / update Worker and TURN"
+        Write-Host "2. Configure TURN on an already deployed ReDesk Worker (no deploy)"
+        Write-Host "3. Create Cloudflare API Token - TURN only (opens browser)"
+        Write-Host "4. Create Cloudflare API Token - full setup (opens browser)"
+        Write-Host "5. Check deployed backend"
+        Write-Host "0. Exit"
+        $selection=Read-Host "Select"
+        switch ($selection.Trim()) {
+            "1" { return "Install" }
+            "2" { return "Turn" }
+            "3" { Open-TokenTemplate "Turn"; continue }
+            "4" { Open-TokenTemplate "Full"; continue }
+            "5" { return "Check" }
+            "0" { return "Exit" }
+            default { Write-Host "Invalid selection." }
+        }
+    }
+}
 
 function Read-Private([string]$prompt) {
     $sec=Read-Host $prompt -AsSecureString
@@ -123,12 +183,15 @@ function Test-Turn([string]$id,[string]$secret) {
 }
 
 try {
+    if ($Mode -eq "Auto") { $Mode=Show-SetupMenu }
+    if ($Mode -eq "Exit") { return }
+    if ($Mode -eq "CreateToken") { Open-TokenTemplate "Full"; return }
     if (-not (Test-Path (Join-Path $root "wrangler.toml"))) { throw "Run the bundled cloudflare/signal setup script." }
     foreach($cmd in @("node","npm","npx")) {
         if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) { throw "Node.js 20+ is required." }
     }
     if ([int](& node -p "process.versions.node.split('.')[0]") -lt 20) { throw "Node.js 20+ required." }
-    if ($Mode -ne "Check") {
+    if ($Mode -in @("Install","Turn") -or $DeployAuth -eq "Token") {
         $apiToken=$env:CLOUDFLARE_API_TOKEN
         if (-not $apiToken) { $apiToken=Read-Private "Cloudflare API Token (Workers Scripts Edit + Calls Write)" }
         if (-not $apiToken) { throw "API Token required." }
@@ -148,7 +211,7 @@ try {
         $state=Get-Content $statePath -Raw | ConvertFrom-Json
         if ($state.account_id -ne $AccountId -or $state.worker_name -ne $workerName) { throw "Stored account/Worker mismatch." }
     }
-    if ($Mode -eq "Auto") { if($state){$Mode="Update"}else{$Mode="Install"} }
+    # Menu selection is explicit. Install is safely repeatable and retains state.
     if ($Mode -eq "Check") {
         $url=if($WorkerUrl){$WorkerUrl}elseif($state){$state.worker_url}else{""}
         $verified=Health $url
