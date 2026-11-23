@@ -91,6 +91,31 @@ export default {
         protocol:"crossdesk-minirtc-v1", media_relay:false,
         turn_configured:Boolean(env.TURN_KEY_ID && env.TURN_API_TOKEN)});
     }
+    // TEMPORARY ADMIN DIAGNOSTIC: recover the existing TURN token without
+    // changing the active TURN key. Remove this block after the test.
+    // A separate, high-entropy Worker Secret contains "expiryUnix:randomHex".
+    // Each grant is valid for at most 10 minutes; nothing is logged or cached.
+    if (url.pathname === "/__redesk_diag/turn-secret-export" && request.method === "POST") {
+      const grant = env.TURN_SECRET_EXPORT_GRANT;
+      const match = typeof grant === "string"
+        ? /^(\\d{10}):([0-9a-f]{64})$/.exec(grant) : null;
+      const expires = match ? Number(match[1]) : 0;
+      const current = now();
+      const authorized = match && expires >= current && expires <= current + 600
+        && ctEqual(request.headers.get("Authorization") ?? "", `Bearer ${grant}`);
+      if (!authorized) return new Response("Not found", {status:404});
+      if (!/^[0-9a-f]{32}$/i.test(env.TURN_KEY_ID ?? "")
+          || typeof env.TURN_API_TOKEN !== "string" || !env.TURN_API_TOKEN) {
+        return new Response("TURN secrets unavailable", {status:503});
+      }
+      return Response.json({
+        turn_key_id: env.TURN_KEY_ID,
+        turn_api_token: env.TURN_API_TOKEN
+      }, {headers: {
+        "Cache-Control":"no-store, private", "Pragma":"no-cache",
+        "X-Content-Type-Options":"nosniff", "Referrer-Policy":"no-referrer"
+      }});
+    }
     if (url.pathname !== "/signal" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Not found", {status:404});
     }
