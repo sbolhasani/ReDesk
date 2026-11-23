@@ -250,7 +250,7 @@ Result CloudflareProvisioningService::Deploy(
     metadata["bindings"].push_back(
         Json{{"type", "inherit"}, {"name", "TURN_API_TOKEN"}});
   }
-  httplib::MultipartFormDataItems parts = {
+  httplib::UploadFormDataItems parts = {
     {"metadata", metadata.dump(), "", "application/json"},
     {"worker.js", worker_script, "worker.js", "application/javascript+module"}
   };
