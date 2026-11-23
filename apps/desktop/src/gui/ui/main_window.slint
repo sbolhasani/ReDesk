@@ -798,6 +798,16 @@ export component MainWindow inherits Window {
     in-out property <string> server-setup-status: "";
     in-out property <bool> server-setup-busy: false;
     in-out property <bool> server-setup-reveal-token: false;
+    in-out property <bool> server-setup-review-open: false;
+    in property <string> server-setup-review-description: "";
+    in property <string> server-setup-review-url: "";
+    in property <bool> server-setup-review-existing: false;
+    in property <bool> server-setup-review-can-use: false;
+    in property <bool> server-setup-review-can-update: false;
+    in property <bool> server-setup-review-turn-key: false;
+    in-out property <bool> server-setup-confirm-update: false;
+    callback server-setup-decision(int);
+    callback server-setup-close();
     callback server-setup-submit(int, int, string, string, string, string);
     callback server-setup-validate-token(string);
     callback server-setup-create-token;
@@ -3984,7 +3994,8 @@ export component MainWindow inherits Window {
             TouchArea { scroll-event(event) => { accept } }
             Text {
                 x: 22px; y: 20px; width: parent.width - 44px; height: 30px;
-                text: root.server-setup-page == 0 ? "Choose a server" : "Configure server";
+                text: root.server-setup-review-open ? "Review Cloudflare Backend"
+                    : root.server-setup-page == 0 ? "Choose a server" : "Configure server";
                 font-size: 21px; font-weight: 600; color: WorkbenchStyle.text;
             }
             Text {
@@ -3992,7 +4003,60 @@ export component MainWindow inherits Window {
                 text: "Select where ReDesk connects for signaling. Existing device identity is preserved.";
                 font-size: 12px; wrap: word-wrap; color: WorkbenchStyle.muted;
             }
-            if root.server-setup-page == 0: VerticalLayout {
+            if root.server-setup-review-open: VerticalLayout {
+                x: 22px; y: 107px; width: parent.width - 44px; spacing: 12px;
+                Text {
+                    text: "Worker: redesk-signal";
+                    color: WorkbenchStyle.text; font-weight: 600; font-size: 13px;
+                }
+                Text {
+                    text: root.server-setup-review-url;
+                    wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-review-description;
+                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-review-turn-key
+                        ? "Existing TURN key detected. No rotation or deletion will occur."
+                        : "No existing ReDesk TURN key was found.";
+                    color: WorkbenchStyle.muted; font-size: 11px; wrap: word-wrap;
+                }
+                if root.server-setup-review-existing: SettingsButton {
+                    width: parent.width; height: 34px; text: "Use Existing Backend";
+                    enabled: root.server-setup-review-can-use && !root.server-setup-busy;
+                    clicked => { root.server-setup-decision(0); }
+                }
+                if root.server-setup-review-existing: SettingsButton {
+                    width: parent.width; height: 34px; text: "Update Worker (keep Durable Object data)";
+                    enabled: root.server-setup-review-can-update && !root.server-setup-busy;
+                    clicked => { root.server-setup-confirm-update = true; }
+                }
+                if !root.server-setup-review-existing: SettingsButton {
+                    width: parent.width; height: 34px; text: "Install New Backend";
+                    enabled: !root.server-setup-review-turn-key && !root.server-setup-busy;
+                    clicked => { root.server-setup-decision(1); }
+                }
+                if root.server-setup-confirm-update: VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "Confirm deploying new Worker code to this Account. The existing Durable Object and registered devices must remain intact. No data reset is requested.";
+                        color: #a43c27; font-size: 12px; wrap: word-wrap;
+                    }
+                    SettingsButton {
+                        width: parent.width; height: 34px; destructive: true;
+                        text: "Confirm Update Worker";
+                        enabled: !root.server-setup-busy;
+                        clicked => { root.server-setup-confirm-update = false; root.server-setup-decision(2); }
+                    }
+                }
+                Text {
+                    text: "Overwrite / Reset Durable Object data is unavailable until a verified, backup-capable procedure is implemented.";
+                    color: WorkbenchStyle.muted; wrap: word-wrap; font-size: 11px;
+                }
+            }
+            if root.server-setup-page == 0 && !root.server-setup-review-open: VerticalLayout {
                 x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
                 SettingsButton {
                     width: parent.width; height: 64px; align-left: true;
@@ -4010,7 +4074,7 @@ export component MainWindow inherits Window {
                     clicked => { root.server-setup-provider = 2; root.server-setup-page = 1; root.server-setup-error = ""; }
                 }
             }
-            if root.server-setup-page == 1: Rectangle {
+            if root.server-setup-page == 1 && !root.server-setup-review-open: Rectangle {
                 x: 22px; y: 110px; width: parent.width - 44px; height: 260px;
                 if root.server-setup-provider == 0: Text {
                     width: parent.width; height: 75px;
@@ -4081,17 +4145,32 @@ export component MainWindow inherits Window {
                 SettingsButton {
                     width: 84px; text: "Back";
                     enabled: root.server-setup-page > 0 && !root.server-setup-busy;
-                    clicked => { root.server-setup-page = 0; root.server-setup-error = ""; }
+                    clicked => {
+                        if root.server-setup-review-open {
+                            root.server-setup-review-open = false;
+                            root.server-setup-confirm-update = false;
+                            root.server-setup-close();
+                        }
+                        root.server-setup-page = 0;
+                        root.server-setup-error = "";
+                    }
                 }
                 Rectangle { horizontal-stretch: 1; }
                 SettingsButton {
                     width: 84px; text: "Cancel";
                     enabled: !root.server-setup-busy;
-                    clicked => { root.server-setup-open = false; root.server-setup-token = ""; root.server-setup-status = ""; }
+                    clicked => {
+                        root.server-setup-close();
+                        root.server-setup-open = false;
+                        root.server-setup-review-open = false;
+                        root.server-setup-confirm-update = false;
+                        root.server-setup-token = "";
+                        root.server-setup-status = "";
+                    }
                 }
                 SettingsButton {
                     width: 92px; primary: true; text: root.server-setup-busy ? "Working..." : "Finish";
-                    enabled: root.server-setup-page == 1 && !root.server-setup-busy;
+                    enabled: root.server-setup-page == 1 && !root.server-setup-busy && !root.server-setup-review-open;
                     clicked => {
                         root.server-setup-submit(root.server-setup-provider,
                             root.server-setup-cloudflare-method, root.server-setup-host,
