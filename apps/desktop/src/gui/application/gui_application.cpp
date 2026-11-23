@@ -1014,11 +1014,17 @@ struct GuiApplication::SlintUi {
   struct ServerSetupResult {
     bool ok = false;
     bool token_validation = false;
+    bool review_ready = false;
     std::string endpoint;
     std::string message;
+    cloudflare::BackendReview review;
   };
   std::future<ServerSetupResult> server_setup_future;
   bool server_setup_gallery_window = false;
+  // A short-lived in-memory token for the explicit review/confirmation step.
+  // It is never stored in INI/identity files and is cleared on cancel/finish.
+  std::string server_setup_pending_token;
+  cloudflare::BackendReview server_setup_review;
 #if _WIN32
   SessionEndObserver session_end;
 #endif
@@ -2054,6 +2060,85 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
 #if defined(__OHOS__)
   main->on_refresh_autostart_status([] { RefreshHarmonyAutostartStatus(); });
 #endif
+  main->on_server_setup_close([this] {
+    ui_->server_setup_pending_token.clear();
+    ui_->server_setup_review = {};
+  });
+  main->on_server_setup_decision([this, main](int32_t action) {
+    if (ui_->server_setup_future.valid()) {
+      main->set_server_setup_error("Another Cloudflare operation is still running.");
+      return;
+    }
+    const auto review = ui_->server_setup_review;
+    if (!review.ok || ui_->server_setup_pending_token.empty()) {
+      main->set_server_setup_error("Review has expired. Validate the token again.");
+      return;
+    }
+    if (action == 0) {
+      if (!review.worker_exists || !review.redesk_health ||
+          !review.durable_object_binding) {
+        main->set_server_setup_error("Existing Worker is not verified as compatible.");
+        return;
+      }
+      std::string endpoint;
+      if (!cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+              review.worker_url, nullptr, &endpoint) ||
+          config_center_->SelectServer(ConfigCenter::SERVER_PROVIDER::CLOUDFLARE,
+                                       endpoint, 443) != 0) {
+        main->set_server_setup_error("Cannot save existing Worker configuration.");
+        return;
+      }
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
+      main->set_server_setup_review_open(false);
+      main->set_server_setup_open(false);
+      main->set_server_setup_status("");
+      ApplySettingsFromConfig(true);
+      return;
+    }
+    if (action != 1 && action != 2) return;
+    if (action == 1 && (review.worker_exists || review.existing_turn_key)) {
+      main->set_server_setup_error("Fresh install blocked by existing Cloudflare infrastructure.");
+      return;
+    }
+    if (action == 2 && (!review.worker_exists || !review.update_safe)) {
+      main->set_server_setup_error("Worker update blocked by compatibility checks.");
+      return;
+    }
+    const std::string token = ui_->server_setup_pending_token;
+    ui_->server_setup_pending_token.clear();
+    main->set_server_setup_busy(true);
+    main->set_server_setup_status(action == 1
+        ? "Installing Cloudflare Worker and TURN..."
+        : "Updating Worker code (preserving data)...");
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    ui_->server_setup_future = std::async(std::launch::async,
+        [token, review, action] {
+      cloudflare::CloudflareProvisioningService service;
+      std::string url = review.worker_url;
+      cloudflare::Result result;
+      if (action == 1) {
+        result = service.ProvisionNew(token, review.account_id,
+             cloudflare::kReDeskSignalingWorker, &url);
+      } else {
+        cloudflare::SetupOptions options;
+        options.account_id = review.account_id;
+        options.worker_url = review.worker_url;
+        options.existing_action = cloudflare::ExistingAction::UpdateCode;
+        options.confirmed_worker_update = true;
+        result = service.Deploy(token, options,
+                                cloudflare::kReDeskSignalingWorker);
+      }
+      std::string endpoint;
+      if (result.ok &&
+          !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+              url, nullptr, &endpoint)) {
+        result = {false, "Invalid Worker URL after deployment"};
+      }
+      return SlintUi::ServerSetupResult{result.ok, false, false,
+                                        std::move(endpoint), result.error};
+    });
+  });
   main->on_server_setup_create_token([this] {
     OpenUrl("https://dash.cloudflare.com/profile/api-tokens");
   });
@@ -2080,8 +2165,6 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       int32_t provider, int32_t method, slint::SharedString host,
       slint::SharedString port, slint::SharedString token,
       slint::SharedString account) {
-    (void)account;
-    (void)token;
     main->set_server_setup_error("");
     if (HasActiveSession()) {
       main->set_server_setup_error("Disconnect active sessions before changing the signaling server.");
@@ -2100,8 +2183,11 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
           return;
         }
         main->set_server_setup_token("");
+        ui_->server_setup_pending_token = api_token;
+        ui_->server_setup_review = {};
+        main->set_server_setup_review_open(false);
         main->set_server_setup_busy(true);
-        main->set_server_setup_status("Checking account and existing backend...");
+        main->set_server_setup_status("Inspecting Cloudflare account, Worker and TURN (read only)...");
         ui_->server_setup_gallery_window = main->get_gallery_mode();
         ui_->server_setup_future = std::async(std::launch::async,
             [api_token, submitted_account] {
@@ -2119,19 +2205,13 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
             }
             account_id = accounts.front().id;
           }
-          std::string worker_url;
-          auto deployed = service.ProvisionNew(
-              api_token, account_id, cloudflare::kReDeskSignalingWorker,
-              &worker_url);
-          std::string address;
-          if (deployed.ok &&
-              !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
-                  worker_url, nullptr, &address)) {
-            return SlintUi::ServerSetupResult{false, false, {},
-                                              "Invalid deployed Worker address"};
-          }
-          return SlintUi::ServerSetupResult{deployed.ok, false,
-                                            std::move(address), deployed.error};
+          auto review = service.ReviewAccount(api_token, account_id);
+          SlintUi::ServerSetupResult result;
+          result.ok = review.ok;
+          result.review_ready = review.ok;
+          result.message = review.explanation;
+          result.review = std::move(review);
+          return result;
         });
         return;
       }
@@ -2758,14 +2838,32 @@ void GuiApplication::Tick() {
       window->set_server_setup_token("");
       window->set_server_setup_error(result.ok ? "" : result.message.c_str());
       window->set_server_setup_status(result.ok ? "Cloudflare API token is active." : "");
+    } else if (result.review_ready) {
+      ui_->server_setup_review = result.review;
+      window->set_server_setup_review_open(true);
+      window->set_server_setup_review_description(result.message.c_str());
+      window->set_server_setup_review_url(result.review.worker_url.c_str());
+      window->set_server_setup_review_existing(result.review.worker_exists);
+      window->set_server_setup_review_can_use(
+          result.review.worker_exists && result.review.redesk_health &&
+          result.review.durable_object_binding);
+      window->set_server_setup_review_can_update(result.review.update_safe);
+      window->set_server_setup_review_turn_key(result.review.existing_turn_key);
+      window->set_server_setup_confirm_update(false);
+      window->set_server_setup_error("");
     } else if (!result.ok) {
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
       window->set_server_setup_error(result.message.c_str());
     } else if (config_center_->SelectServer(
             ConfigCenter::SERVER_PROVIDER::CLOUDFLARE,
             result.endpoint, 443) != 0) {
       window->set_server_setup_error("Could not save Cloudflare server configuration.");
     } else {
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
       window->set_server_setup_token("");
+      window->set_server_setup_review_open(false);
       window->set_server_setup_open(false);
       ApplySettingsFromConfig(true);
     }
