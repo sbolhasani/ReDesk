@@ -785,6 +785,22 @@ export component MainWindow inherits Window {
     in-out property <string> file-save-path: "";
     in-out property <string> server-host: "";
     in-out property <string> server-port: "";
+    // First-run and Settings share the same server selector.
+    in-out property <bool> server-setup-open: false;
+    in-out property <int> server-setup-page: 0;
+    in-out property <int> server-setup-provider: 0;
+    in-out property <int> server-setup-cloudflare-method: 0;
+    in-out property <string> server-setup-host: "";
+    in-out property <string> server-setup-port: "9099";
+    in-out property <string> server-setup-token: "";
+    in-out property <string> server-setup-account: "";
+    in-out property <string> server-setup-error: "";
+    in-out property <string> server-setup-status: "";
+    in-out property <bool> server-setup-busy: false;
+    in-out property <bool> server-setup-reveal-token: false;
+    callback server-setup-submit(int, int, string, string, string, string);
+    callback server-setup-validate-token(string);
+    callback server-setup-create-token;
     in-out property <string> self-host-settings-error: "";
     in property <bool> settings-session-active: false;
 
@@ -2970,7 +2986,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         SettingsGroup {
-                            title: GalleryStrings.texts[116]; rows: 4;
+                            title: GalleryStrings.texts[116]; rows: 5;
                             SettingsToggleRow {
                                 label: GalleryStrings.texts[117];
                                 checked <=> root.ip-direct-enabled-draft;
@@ -2987,6 +3003,19 @@ export component MainWindow inherits Window {
                                     enabled: !root.settings-session-active;
                                     model: [UiStrings.turn-auto, UiStrings.turn-force-udp, UiStrings.turn-force-tcp];
                                     current-index <=> root.turn-mode-index;
+                                }
+                            }
+                            SettingsRow {
+                                label: "Server Configuration";
+                                SettingsButton {
+                                    x: parent.width - 156px; y: 4px; width: 144px;
+                                    text: "Change Server";
+                                    enabled: !root.settings-session-active;
+                                    clicked => {
+                                        root.settings-open = false;
+                                        root.server-setup-open = true;
+                                        root.server-setup-page = 0;
+                                    }
                                 }
                             }
                             SettingsToggleRow {
@@ -3932,6 +3961,141 @@ export component MainWindow inherits Window {
                             accessible-action-default => { root.dismiss-lan-access-warning(); }
                             clicked => { root.dismiss-lan-access-warning(); }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+
+    // Modal server selection. No existing settings or device identity are
+    // changed until the native callback successfully commits a selection.
+    if root.server-setup-open: Rectangle {
+        width: parent.width; height: parent.height;
+        background: #15223888; z: 350;
+        TouchArea { scroll-event(event) => { accept } }
+        DialogSurface {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(520px, parent.width - 30px);
+            height: min(510px, parent.height - 24px);
+            background: #f8fafc;
+            outline-color: UiSurface.edge;
+            TouchArea { scroll-event(event) => { accept } }
+            Text {
+                x: 22px; y: 20px; width: parent.width - 44px; height: 30px;
+                text: root.server-setup-page == 0 ? "Choose a server" : "Configure server";
+                font-size: 21px; font-weight: 600; color: WorkbenchStyle.text;
+            }
+            Text {
+                x: 22px; y: 56px; width: parent.width - 44px; height: 42px;
+                text: "Select where ReDesk connects for signaling. Existing device identity is preserved.";
+                font-size: 12px; wrap: word-wrap; color: WorkbenchStyle.muted;
+            }
+            if root.server-setup-page == 0: VerticalLayout {
+                x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
+                SettingsButton {
+                    width: parent.width; height: 64px; align-left: true;
+                    text: "Cloudflare - your own signaling backend";
+                    clicked => { root.server-setup-provider = 1; root.server-setup-page = 1; root.server-setup-error = ""; }
+                }
+                SettingsButton {
+                    width: parent.width; height: 64px; align-left: true;
+                    text: "CrossDesk Public Server - no setup";
+                    clicked => { root.server-setup-provider = 0; root.server-setup-page = 1; root.server-setup-error = ""; }
+                }
+                SettingsButton {
+                    width: parent.width; height: 64px; align-left: true;
+                    text: "Custom Server - compatible self-hosted server";
+                    clicked => { root.server-setup-provider = 2; root.server-setup-page = 1; root.server-setup-error = ""; }
+                }
+            }
+            if root.server-setup-page == 1: Rectangle {
+                x: 22px; y: 110px; width: parent.width - 44px; height: 260px;
+                if root.server-setup-provider == 0: Text {
+                    width: parent.width; height: 75px;
+                    text: "Use the public CrossDesk signaling service. No Cloudflare API token or backend setup is required.";
+                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 13px;
+                }
+                if root.server-setup-provider == 2: VerticalLayout {
+                    width: parent.width; spacing: 8px;
+                    Text { text: "Server host or signaling URL"; color: WorkbenchStyle.text; }
+                    RoundedLineEdit { width: parent.width; text <=> root.server-setup-host; }
+                    Text { text: "Signal port"; color: WorkbenchStyle.text; }
+                    RoundedLineEdit { width: parent.width; text <=> root.server-setup-port; input-type: InputType.number; }
+                }
+                if root.server-setup-provider == 1: VerticalLayout {
+                    width: parent.width; spacing: 9px;
+                    HorizontalLayout {
+                        height: 32px; spacing: 8px;
+                        SettingsButton {
+                            width: parent.width / 2 - 4px; text: "Existing Worker";
+                            clicked => { root.server-setup-cloudflare-method = 0; root.server-setup-error = ""; }
+                        }
+                        SettingsButton {
+                            width: parent.width / 2 - 4px; text: "Automatic (API Token)";
+                            clicked => { root.server-setup-cloudflare-method = 1; root.server-setup-error = ""; }
+                        }
+                    }
+                    if root.server-setup-cloudflare-method == 0: VerticalLayout {
+                        spacing: 7px;
+                        Text { text: "HTTPS Worker URL"; color: WorkbenchStyle.text; }
+                        RoundedLineEdit {
+                            width: parent.width;
+                            placeholder-text: "https://redesk-signal.example.workers.dev";
+                            text <=> root.server-setup-host;
+                        }
+                        Text {
+                            text: "ReDesk will verify /health before saving the WSS /signal endpoint.";
+                            wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 11px;
+                        }
+                    }
+                    if root.server-setup-cloudflare-method == 1: VerticalLayout {
+                        spacing: 7px;
+                        Text { text: "Cloudflare API Token"; color: WorkbenchStyle.text; }
+                        RoundedLineEdit {
+                            width: parent.width; text <=> root.server-setup-token;
+                            input-type: root.server-setup-reveal-token ? InputType.text : InputType.password;
+                        }
+                        HorizontalLayout {
+                            height: 30px; spacing: 8px;
+                            SettingsButton { width: 94px; text: root.server-setup-reveal-token ? "Hide" : "Show"; clicked => { root.server-setup-reveal-token = !root.server-setup-reveal-token; } }
+                            SettingsButton { width: 125px; text: "Validate Token"; enabled: !root.server-setup-busy; clicked => { root.server-setup-validate-token(root.server-setup-token); } }
+                            SettingsButton { width: 125px; text: "Create Token"; clicked => { root.server-setup-create-token(); } }
+                        }
+                        Text { text: "Account ID (optional when the token can list accounts)"; color: WorkbenchStyle.text; font-size: 11px; }
+                        RoundedLineEdit { width: parent.width; text <=> root.server-setup-account; }
+                    }
+                }
+            }
+            if root.server-setup-error != "": Text {
+                x: 22px; y: parent.height - 118px; width: parent.width - 44px; height: 44px;
+                text: root.server-setup-error; wrap: word-wrap; color: #bb3333; font-size: 11px;
+            }
+            if root.server-setup-status != "": Text {
+                x: 22px; y: parent.height - 95px; width: parent.width - 44px; height: 20px;
+                text: root.server-setup-status; overflow: elide; color: WorkbenchStyle.muted; font-size: 11px;
+            }
+            HorizontalLayout {
+                x: 22px; y: parent.height - 56px; width: parent.width - 44px; height: 34px; spacing: 10px;
+                SettingsButton {
+                    width: 84px; text: "Back";
+                    enabled: root.server-setup-page > 0 && !root.server-setup-busy;
+                    clicked => { root.server-setup-page = 0; root.server-setup-error = ""; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                SettingsButton {
+                    width: 84px; text: "Cancel";
+                    enabled: !root.server-setup-busy;
+                    clicked => { root.server-setup-open = false; root.server-setup-token = ""; root.server-setup-status = ""; }
+                }
+                SettingsButton {
+                    width: 92px; primary: true; text: root.server-setup-busy ? "Working..." : "Finish";
+                    enabled: root.server-setup-page == 1 && !root.server-setup-busy;
+                    clicked => {
+                        root.server-setup-submit(root.server-setup-provider,
+                            root.server-setup-cloudflare-method, root.server-setup-host,
+                            root.server-setup-port, root.server-setup-token, root.server-setup-account);
                     }
                 }
             }
