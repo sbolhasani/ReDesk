@@ -251,6 +251,37 @@ bool CloudflareProvisioningService::MayUpdateWorker(
          status.redesk_health && !status.unexpected_bindings;
 }
 
+BackendReview CloudflareProvisioningService::WithHealthStatus(
+    const BackendReview& previous, const BackendStatus& health) {
+  auto updated = previous;
+  updated.redesk_health = health.redesk_health;
+  updated.turn_configured = health.turn_configured;
+  updated.worker_exists = previous.worker_exists || health.redesk_health;
+  updated.update_safe = health.redesk_health && previous.worker_bindings_verified;
+  return updated;
+}
+
+BackendReview CloudflareProvisioningService::RetryHealth(
+    const BackendReview& previous) const {
+  // Health is public and independent of the token. Keep the account-level
+  // evidence recorded during discovery, but never promote an unverified
+  // Worker into the code-update path.
+  auto refreshed = WithHealthStatus(previous, CheckHealth(previous.worker_url));
+  if (refreshed.redesk_health) {
+    refreshed.explanation = refreshed.update_safe
+        ? "ReDesk /health is healthy. Use Existing Backend is available; "
+          "code update is also permitted after explicit confirmation."
+        : "ReDesk /health is healthy. Use Existing Backend is available. "
+          "Code update remains disabled because Worker bindings could not be verified.";
+  } else {
+    refreshed.explanation =
+        "ReDesk /health is still unavailable or incompatible. "
+        "Use Existing and Update remain disabled. You may retry or go back "
+        "to correct the Worker URL.";
+  }
+  return refreshed;
+}
+
 BackendDiscovery CloudflareProvisioningService::DiscoverBackend(
     const std::string& token, const std::string& requested_account,
     const std::string& requested_url) const {
@@ -356,13 +387,14 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
   // without elevated provisioning rights.
   const auto health = CheckHealth(review.worker_url);
   const auto worker = Inspect(token, account, review.worker_url);
-  review.redesk_health = health.redesk_health;
-  review.turn_configured = health.turn_configured;
-  review.worker_exists = worker.worker_exists || health.redesk_health;
+  review.worker_exists = worker.worker_exists;
   review.durable_object_binding = worker.durable_object_binding;
-  // Updating requires verified account-owned bindings, not merely a
-  // compatible health response. Never overwrite an unknown Worker.
-  review.update_safe = MayUpdateWorker(worker) && health.redesk_health;
+  // Preserve binding evidence independently of the transient health result.
+  // The deployment path still performs its own fresh safety verification.
+  review.worker_bindings_verified =
+      worker.worker_exists && worker.durable_object_binding &&
+      !worker.unexpected_bindings;
+  review = WithHealthStatus(review, health);
 
   // TURN enumeration is optional for reusing an existing healthy Worker.
   // If it is denied, fresh installation remains disabled, because an
