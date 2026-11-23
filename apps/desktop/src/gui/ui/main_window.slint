@@ -4123,7 +4123,7 @@ export component MainWindow inherits Window {
                     }
                     if root.server-setup-provider == 1: VerticalLayout {
                         width: parent.width;
-                        height: root.server-setup-cloudflare-method == 1 ? 218px : 152px;
+                        height: root.server-setup-cloudflare-method == 1 ? 270px : 152px;
                         vertical-stretch: 0; spacing: 8px;
                         HorizontalLayout {
                             width: parent.width; height: 32px; vertical-stretch: 0; spacing: 8px;
@@ -4155,7 +4155,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.server-setup-cloudflare-method == 1: VerticalLayout {
-                            width: parent.width; height: 174px; vertical-stretch: 0; spacing: 7px;
+                            width: parent.width; height: 230px; vertical-stretch: 0; spacing: 7px;
                             Text {
                                 height: 18px; vertical-stretch: 0;
                                 text: "Cloudflare API Token"; color: WorkbenchStyle.text;
@@ -4196,6 +4196,17 @@ export component MainWindow inherits Window {
                             RoundedLineEdit {
                                 width: parent.width; height: 36px; vertical-stretch: 0;
                                 text <=> root.server-setup-account;
+                            }
+                            Text {
+                                height: 19px; vertical-stretch: 0;
+                                text: "Existing Worker URL (optional; helps when discovery is restricted)";
+                                color: WorkbenchStyle.text; font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                            RoundedLineEdit {
+                                width: parent.width; height: 36px; vertical-stretch: 0;
+                                placeholder-text: "https://redesk-signal.example.workers.dev";
+                                text <=> root.server-setup-host;
                             }
                         }
                     }
