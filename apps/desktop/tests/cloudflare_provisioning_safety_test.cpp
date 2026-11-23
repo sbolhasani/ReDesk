@@ -7,7 +7,7 @@
 namespace {
 void Require(bool condition, const char* message) {
   if (!condition) {
-    std::cerr << "Cloudflare safety test FAILED: " << message << '\\n';
+    std::cerr << "Cloudflare safety test FAILED: " << message << std::endl;
     std::exit(1);
   }
 }
