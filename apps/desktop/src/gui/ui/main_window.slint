@@ -4034,7 +4034,7 @@ export component MainWindow inherits Window {
                         : "No existing ReDesk TURN key was found.";
                     color: WorkbenchStyle.muted; font-size: 11px; wrap: word-wrap;
                 }
-                if root.server-setup-review-existing && !root.server-setup-review-can-use: SettingsButton {
+                if !root.server-setup-review-can-use: SettingsButton {
                     width: parent.width; height: 34px;
                     primary: true;
                     text: root.server-setup-busy ? "Checking /health..." : "Retry Health Check";
