@@ -645,9 +645,10 @@ function setup_targets()
         -- version and use fmt's supported runtime-parser fallback here.
         add_defines("FMT_CONSTEVAL=")
         add_packages("slint", {public = true})
-        add_packages("libyuv", "tinyfiledialogs", "openssl3", "libsdl3", "nlohmann_json", "asio", "websocketpp")
+        add_packages("libyuv", "tinyfiledialogs", "openssl3", "libsdl3", "nlohmann_json", "asio", "websocketpp", "cpp-httplib")
         add_defines("ASIO_STANDALONE")
         add_files("apps/desktop/src/network/lan/*.cpp")
+        add_files("apps/desktop/src/cloudflare/cloudflare_provisioning_service.cpp")
         if not is_config("CROSSDESK_PORTABLE", true) then
             add_defines("CROSSDESK_HAS_UPDATER=1", {public = true})
             add_deps("updater_core")
