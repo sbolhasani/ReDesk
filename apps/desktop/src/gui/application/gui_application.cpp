@@ -2140,7 +2140,16 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     });
   });
   main->on_server_setup_create_token([this] {
-    OpenUrl("https://dash.cloudflare.com/profile/api-tokens");
+    // Match Get-TokenTemplateUrl("Full") in
+    // cloudflare/signal/setup-redesk-cloudflare.ps1. Cloudflare still requires
+    // the user to review and approve the selected permission groups.
+    constexpr const char* kTokenTemplate =
+        "https://dash.cloudflare.com/?to=/:account/api-tokens"
+        "&permissionGroupKeys=%5B%7B%22key%22%3A%22b711942448db4b0aace44d1312f9fdb0%22%2C%22type%22%3A%22edit%22%7D%2C"
+        "%7B%22key%22%3A%22e086da7e2179491d91ee5f35b3ca210a%22%2C%22type%22%3A%22edit%22%7D%2C"
+        "%7B%22key%22%3A%22c1fde68c7bcc44588cbb6ddbc16d6480%22%2C%22type%22%3A%22read%22%7D%5D"
+        "&name=ReDesk%20Backend%20Setup";
+    OpenUrl(kTokenTemplate);
   });
   main->on_server_setup_validate_token([this, main](slint::SharedString token) {
     if (ui_->server_setup_future.valid()) {
@@ -2841,9 +2850,9 @@ void GuiApplication::Tick() {
     } else {
     window->set_server_setup_busy(false);
     window->set_server_setup_status("");
-    // Drop the validation token from the Slint model as soon as the request completes.
+    // Validation never consumes the entered token: users may correct
+    // permissions or revalidate without having to paste it again.
     if (result.token_validation) {
-      window->set_server_setup_token("");
       window->set_server_setup_error(result.ok ? "" : result.message.c_str());
       window->set_server_setup_status(result.ok ? "Cloudflare API token is active." : "");
     } else if (result.review_ready) {
