@@ -810,6 +810,7 @@ export component MainWindow inherits Window {
     in property <bool> server-setup-review-turn-key: false;
     in-out property <bool> server-setup-confirm-update: false;
     callback server-setup-decision(int);
+    callback server-setup-retry-health();
     callback server-setup-close();
     callback server-setup-submit(int, int, string, string, string, string);
     callback server-setup-validate-token(string);
@@ -4033,6 +4034,13 @@ export component MainWindow inherits Window {
                         : "No existing ReDesk TURN key was found.";
                     color: WorkbenchStyle.muted; font-size: 11px; wrap: word-wrap;
                 }
+                if root.server-setup-review-existing && !root.server-setup-review-can-use: SettingsButton {
+                    width: parent.width; height: 34px;
+                    primary: true;
+                    text: root.server-setup-busy ? "Checking /health..." : "Retry Health Check";
+                    enabled: !root.server-setup-busy;
+                    clicked => { root.server-setup-retry-health(); }
+                }
                 if root.server-setup-review-existing: SettingsButton {
                     width: parent.width; height: 34px; text: "Use Existing Backend";
                     enabled: root.server-setup-review-can-use && !root.server-setup-busy;
@@ -4190,8 +4198,17 @@ export component MainWindow inherits Window {
                                     text <=> root.server-setup-token;
                                     input-type: root.server-setup-reveal-token ? InputType.text : InputType.password;
                                     edited => {
+                                        // All discovery hints belong to the old token.
+                                        // A different token starts with a clean form.
                                         root.server-setup-token-verified = false;
+                                        root.server-setup-need-account = false;
+                                        root.server-setup-need-worker-url = false;
+                                        root.server-setup-account = "";
+                                        root.server-setup-host = "";
+                                        root.server-setup-review-open = false;
+                                        root.server-setup-confirm-update = false;
                                         root.server-setup-error = "";
+                                        root.server-setup-status = "";
                                     }
                                 }
                                 SettingsButton {
