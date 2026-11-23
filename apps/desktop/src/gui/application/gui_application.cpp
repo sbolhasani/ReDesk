@@ -37,6 +37,8 @@
 #include <vector>
 
 #include "crossdesk_ui.h"
+#include "cloudflare/cloudflare_provisioning_service.h"
+#include "cloudflare/bundled_worker.h"
 #include "fa_solid_900.h"
 #include "features/about/about_catalog.h"
 #include "features/feedback/diagnostic_export.h"
@@ -1009,6 +1011,14 @@ void DragWindow(WindowHandle& component, int phase, float mouse_x,
 }  // namespace
 
 struct GuiApplication::SlintUi {
+  struct ServerSetupResult {
+    bool ok = false;
+    bool token_validation = false;
+    std::string endpoint;
+    std::string message;
+  };
+  std::future<ServerSetupResult> server_setup_future;
+  bool server_setup_gallery_window = false;
 #if _WIN32
   SessionEndObserver session_end;
 #endif
@@ -1517,6 +1527,7 @@ void GuiApplication::InitializeUi() {
   }
   ResetSettingsUi();
   ResetSettingsUi(true);
+  ui_->main->set_server_setup_open(!config_center_->IsServerSelectionCompleted());
   BindMainCallbacks();
   BindMainCallbacks(true);
   InitializeSystemTray();
@@ -2043,6 +2054,85 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
 #if defined(__OHOS__)
   main->on_refresh_autostart_status([] { RefreshHarmonyAutostartStatus(); });
 #endif
+  main->on_server_setup_create_token([this] {
+    OpenUrl("https://dash.cloudflare.com/profile/api-tokens");
+  });
+  main->on_server_setup_validate_token([this, main](slint::SharedString token) {
+    if (ui_->server_setup_future.valid()) {
+      main->set_server_setup_error("Another Cloudflare operation is still running.");
+      return;
+    }
+    const std::string submitted(token);
+    if (submitted.empty()) {
+      main->set_server_setup_error("Enter your Cloudflare API token.");
+      return;
+    }
+    main->set_server_setup_error("");
+    main->set_server_setup_status("Validating API token...");
+    main->set_server_setup_busy(true);
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    ui_->server_setup_future = std::async(std::launch::async, [submitted] {
+      const auto check = cloudflare::CloudflareProvisioningService{}.ValidateToken(submitted);
+      return SlintUi::ServerSetupResult{check.ok, true, {}, check.error};
+    });
+  });
+  main->on_server_setup_submit([this, main](
+      int32_t provider, int32_t method, slint::SharedString host,
+      slint::SharedString port, slint::SharedString token,
+      slint::SharedString account) {
+    (void)account;
+    (void)token;
+    main->set_server_setup_error("");
+    if (HasActiveSession()) {
+      main->set_server_setup_error("Disconnect active sessions before changing the signaling server.");
+      return;
+    }
+    if (provider == 1) {
+      if (method == 1) {
+        main->set_server_setup_error(
+            "Automatic provisioning is not ready in this build. "
+            "Use Connect to Existing Worker or another server.");
+        return;
+      }
+      if (ui_->server_setup_future.valid()) {
+        main->set_server_setup_error("A Cloudflare check is still running.");
+        return;
+      }
+      main->set_server_setup_busy(true);
+      main->set_server_setup_status("Verifying existing ReDesk Worker...");
+      const std::string url(host);
+      ui_->server_setup_gallery_window = main->get_gallery_mode();
+      ui_->server_setup_future = std::async(std::launch::async, [url] {
+        std::string endpoint;
+        auto result = cloudflare::CloudflareProvisioningService{}.ConfigureExisting(
+            cloudflare::SetupOptions{.worker_url = url}, &endpoint);
+        return SlintUi::ServerSetupResult{result.ok, false,
+                                          std::move(endpoint), result.error};
+      });
+      return;
+    }
+    if (provider != 0 && provider != 2) {
+      main->set_server_setup_error("Unknown server provider");
+      return;
+    }
+    const auto parsed_port = ParsePort(port);
+    if (provider == 2 && !parsed_port) {
+      main->set_server_setup_error("Enter a valid signal port (1-65535).");
+      return;
+    }
+    const auto choice = provider == 0
+        ? ConfigCenter::SERVER_PROVIDER::PUBLIC
+        : ConfigCenter::SERVER_PROVIDER::CUSTOM;
+    if (config_center_->SelectServer(choice, std::string(host),
+                                    provider == 0 ? 0 : *parsed_port) != 0) {
+      main->set_server_setup_error("Server address is invalid or could not be saved.");
+      return;
+    }
+    main->set_server_setup_token("");
+    main->set_server_setup_open(false);
+    main->set_server_setup_status("");
+    ApplySettingsFromConfig(true);
+  });
   main->on_save_self_hosted_settings([this, main] {
     // Stage the endpoint until the surrounding settings dialog is confirmed.
     return ValidateSelfHostedSettingsFromUi(main->get_gallery_mode());
@@ -2615,6 +2705,30 @@ void GuiApplication::BindServerCallbacks() {
 }
 
 void GuiApplication::Tick() {
+  if (ui_ && ui_->server_setup_future.valid() &&
+      ui_->server_setup_future.wait_for(std::chrono::milliseconds(0)) ==
+          std::future_status::ready) {
+    auto result = ui_->server_setup_future.get();
+    auto& window = ui_->Window(ui_->server_setup_gallery_window);
+    window->set_server_setup_busy(false);
+    window->set_server_setup_status("");
+    // Drop the validation token from the Slint model as soon as the request completes.
+    if (result.token_validation) {
+      window->set_server_setup_token("");
+      window->set_server_setup_error(result.ok ? "" : result.message.c_str());
+      window->set_server_setup_status(result.ok ? "Cloudflare API token is active." : "");
+    } else if (!result.ok) {
+      window->set_server_setup_error(result.message.c_str());
+    } else if (config_center_->SelectServer(
+            ConfigCenter::SERVER_PROVIDER::CLOUDFLARE,
+            result.endpoint, 443) != 0) {
+      window->set_server_setup_error("Could not save Cloudflare server configuration.");
+    } else {
+      window->set_server_setup_token("");
+      window->set_server_setup_open(false);
+      ApplySettingsFromConfig(true);
+    }
+  }
 #if _WIN32
   if (ui_) {
     ui_->session_end.Start();  // Retry a transient native-window creation failure.
