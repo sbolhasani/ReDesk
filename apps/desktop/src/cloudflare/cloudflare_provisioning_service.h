@@ -47,6 +47,12 @@ class CloudflareProvisioningService {
   BackendStatus CheckHealth(const std::string& worker_url) const;
   Result ConfigureExisting(const SetupOptions& options,
                            std::string* signal_address) const;
+  // Fresh deployment only. Existing Worker/TURN state always requires a
+  // separate explicit reconciliation; this never deletes or rotates keys.
+  Result ProvisionNew(const std::string& api_token,
+                      const std::string& account_id,
+                      const std::string& worker_script,
+                      std::string* worker_url, Progress progress = {}) const;
   Result Deploy(const std::string& api_token, const SetupOptions& options,
                 const std::string& worker_script, Progress progress = {}) const;
   // Only uses a separately authorized action. Never deletes existing keys.
