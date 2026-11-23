@@ -83,6 +83,42 @@ int main() {
   safe.redesk_health = false;
   Require(!CloudflareProvisioningService::MayUpdateWorker(safe),
           "unknown worker identity blocks update");
+  // A failed health check cannot unlock either action.
+  crossdesk::cloudflare::BackendReview review;
+  review.ok = true;
+  review.worker_exists = true;
+  review.worker_bindings_verified = true;
+  review.worker_url = "https://redesk-signal.example.workers.dev";
+  crossdesk::cloudflare::BackendStatus unhealthy;
+  auto failed_retry = CloudflareProvisioningService::WithHealthStatus(
+      review, unhealthy);
+  Require(!failed_retry.redesk_health && !failed_retry.update_safe,
+          "failed health check must not unlock update");
+
+  // A healthy public endpoint allows Use Existing after a retry. Updating
+  // requires prior account-level binding evidence, not /health alone.
+  crossdesk::cloudflare::BackendStatus healthy;
+  healthy.redesk_health = true;
+  healthy.turn_configured = true;
+  auto recovered = CloudflareProvisioningService::WithHealthStatus(
+      review, healthy);
+  Require(recovered.redesk_health && recovered.update_safe,
+          "healthy retry restores update only with prior binding evidence");
+  Require(recovered.turn_configured && recovered.worker_url == review.worker_url,
+          "health retry retains the selected Worker and updates TURN status");
+  review.worker_bindings_verified = false;
+  review.worker_exists = false;
+  auto restricted = CloudflareProvisioningService::WithHealthStatus(
+      review, healthy);
+  Require(restricted.worker_exists && restricted.redesk_health,
+          "healthy retry permits use when metadata API is restricted");
+  Require(!restricted.update_safe,
+          "healthy endpoint alone must never authorize Worker code overwrite");
+  auto failed_again = CloudflareProvisioningService::WithHealthStatus(
+      recovered, unhealthy);
+  Require(!failed_again.update_safe && !failed_again.redesk_health,
+          "subsequent failed health check disables both actions again");
+  
   std::cout << "Cloudflare safety tests passed." << std::endl;
   return 0;
 }
