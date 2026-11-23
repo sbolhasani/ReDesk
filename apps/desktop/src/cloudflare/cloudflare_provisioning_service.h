@@ -36,6 +36,9 @@ struct BackendReview {
   bool existing_turn_key = false;
   bool turn_keys_checked = false;
   bool update_safe = false;
+  // Set only after the account API verifies the expected SignalHub binding.
+  // RetryHealth may enable code updates only with this prior evidence.
+  bool worker_bindings_verified = false;
   std::string account_id;
   std::string worker_url;
   std::string explanation;
@@ -81,6 +84,12 @@ class CloudflareProvisioningService {
   BackendReview ReviewAccount(const std::string& api_token,
                               const std::string& account_id,
                               const std::string& worker_url = {}) const;
+  // Rechecks ONLY the public /health endpoint, without API token or writes.
+  // Does not re-enumerate TURN keys or change Durable Object data.
+  BackendReview RetryHealth(const BackendReview& previous) const;
+  // Pure safety policy, used by network-free tests.
+  static BackendReview WithHealthStatus(const BackendReview& previous,
+                                        const BackendStatus& health);
   BackendDiscovery DiscoverBackend(const std::string& api_token,
                                    const std::string& account_id = {},
                                    const std::string& worker_url = {}) const;
