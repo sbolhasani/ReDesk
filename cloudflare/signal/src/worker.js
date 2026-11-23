@@ -98,7 +98,7 @@ export default {
     if (url.pathname === "/__redesk_diag/turn-secret-export" && request.method === "POST") {
       const grant = env.TURN_SECRET_EXPORT_GRANT;
       const match = typeof grant === "string"
-        ? /^(\\d{10}):([0-9a-f]{64})$/.exec(grant) : null;
+        ? /^(\d{10}):([0-9a-f]{64})$/.exec(grant) : null;
       const expires = match ? Number(match[1]) : 0;
       const current = now();
       const authorized = match && expires >= current && expires <= current + 600
