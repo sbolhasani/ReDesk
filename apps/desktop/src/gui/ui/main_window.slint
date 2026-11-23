@@ -798,6 +798,9 @@ export component MainWindow inherits Window {
     in-out property <string> server-setup-status: "";
     in-out property <bool> server-setup-busy: false;
     in-out property <bool> server-setup-reveal-token: false;
+    in-out property <bool> server-setup-need-account: false;
+    in-out property <bool> server-setup-need-worker-url: false;
+    in-out property <bool> server-setup-token-verified: false;
     in-out property <bool> server-setup-review-open: false;
     in property <string> server-setup-review-description: "";
     in property <string> server-setup-review-url: "";
@@ -4011,7 +4014,7 @@ export component MainWindow inherits Window {
                 horizontal-scrollbar-policy: always-off;
                 viewport-height: server-review-content.preferred-height;
                 server-review-content := VerticalLayout {
-                    width: parent.width; padding: 0px; spacing: 12px;
+                    width: parent.width - 16px; padding: 0px; spacing: 12px;
                 Text {
                     text: "Worker: redesk-signal";
                     color: WorkbenchStyle.text; font-weight: 600; font-size: 13px;
@@ -4094,7 +4097,9 @@ export component MainWindow inherits Window {
                 horizontal-scrollbar-policy: always-off;
                 viewport-height: server-configuration-content.preferred-height;
                 server-configuration-content := VerticalLayout {
-                    width: parent.width; padding: 0px; spacing: 10px;
+                    // Reserve a full scrollbar gutter so scrolling never
+                    // overlays the textboxes or their right-hand buttons.
+                    width: parent.width - 16px; padding: 0px; spacing: 10px;
                     if root.server-setup-provider == 0: Text {
                         width: parent.width; height: 75px; vertical-stretch: 0;
                         text: "Use the public CrossDesk signaling service. No Cloudflare API token or backend setup is required.";
@@ -4123,7 +4128,10 @@ export component MainWindow inherits Window {
                     }
                     if root.server-setup-provider == 1: VerticalLayout {
                         width: parent.width;
-                        height: root.server-setup-cloudflare-method == 1 ? 270px : 152px;
+                        height: root.server-setup-cloudflare-method == 1
+                            ? 137px + (root.server-setup-need-account ? 62px : 0px)
+                                     + (root.server-setup-need-worker-url ? 62px : 0px)
+                            : 152px;
                         vertical-stretch: 0; spacing: 8px;
                         HorizontalLayout {
                             width: parent.width; height: 32px; vertical-stretch: 0; spacing: 8px;
@@ -4155,7 +4163,10 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.server-setup-cloudflare-method == 1: VerticalLayout {
-                            width: parent.width; height: 230px; vertical-stretch: 0; spacing: 7px;
+                            width: parent.width;
+                            height: 96px + (root.server-setup-need-account ? 62px : 0px)
+                                         + (root.server-setup-need-worker-url ? 62px : 0px);
+                            vertical-stretch: 0; spacing: 7px;
                             Text {
                                 height: 18px; vertical-stretch: 0;
                                 text: "Cloudflare API Token"; color: WorkbenchStyle.text;
@@ -4167,6 +4178,10 @@ export component MainWindow inherits Window {
                                     width: parent.width - 88px; height: 36px;
                                     text <=> root.server-setup-token;
                                     input-type: root.server-setup-reveal-token ? InputType.text : InputType.password;
+                                    edited => {
+                                        root.server-setup-token-verified = false;
+                                        root.server-setup-error = "";
+                                    }
                                 }
                                 SettingsButton {
                                     width: 80px; height: 36px;
@@ -4177,36 +4192,46 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 width: parent.width; height: 34px; vertical-stretch: 0; spacing: 8px;
                                 SettingsButton {
-                                    width: 130px; height: 34px; text: "Validate Token";
-                                    enabled: !root.server-setup-busy;
-                                    clicked => { root.server-setup-validate-token(root.server-setup-token); }
+                                    width: 180px; height: 34px;
+                                    primary: true;
+                                    text: root.server-setup-busy ? "Fetching..." : "Fetch Cloudflare";
+                                    enabled: !root.server-setup-busy && root.server-setup-token != "";
+                                    clicked => {
+                                        root.server-setup-validate-token(root.server-setup-token);
+                                    }
                                 }
                                 SettingsButton {
-                                    width: 130px; height: 34px; text: "Create Token";
+                                    width: 120px; height: 34px; text: "Create Token";
                                     enabled: !root.server-setup-busy;
                                     clicked => { root.server-setup-create-token(); }
                                 }
                             }
-                            Text {
-                                height: 19px; vertical-stretch: 0;
-                                text: "Account ID (optional when the token can list accounts)";
-                                color: WorkbenchStyle.text; font-size: 11px;
-                                vertical-alignment: center;
+                            if root.server-setup-need-account: VerticalLayout {
+                                width: parent.width; height: 55px; vertical-stretch: 0; spacing: 4px;
+                                Text {
+                                    height: 17px; vertical-stretch: 0;
+                                    text: "Cloudflare Account ID (required to continue)";
+                                    color: WorkbenchStyle.text; font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                RoundedLineEdit {
+                                    width: parent.width; height: 34px; vertical-stretch: 0;
+                                    text <=> root.server-setup-account;
+                                }
                             }
-                            RoundedLineEdit {
-                                width: parent.width; height: 36px; vertical-stretch: 0;
-                                text <=> root.server-setup-account;
-                            }
-                            Text {
-                                height: 19px; vertical-stretch: 0;
-                                text: "Existing Worker URL (optional; helps when discovery is restricted)";
-                                color: WorkbenchStyle.text; font-size: 11px;
-                                vertical-alignment: center;
-                            }
-                            RoundedLineEdit {
-                                width: parent.width; height: 36px; vertical-stretch: 0;
-                                placeholder-text: "https://redesk-signal.example.workers.dev";
-                                text <=> root.server-setup-host;
+                            if root.server-setup-need-worker-url: VerticalLayout {
+                                width: parent.width; height: 55px; vertical-stretch: 0; spacing: 4px;
+                                Text {
+                                    height: 17px; vertical-stretch: 0;
+                                    text: "Existing Worker URL (Cloudflare could not discover it)";
+                                    color: WorkbenchStyle.text; font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                RoundedLineEdit {
+                                    width: parent.width; height: 34px; vertical-stretch: 0;
+                                    placeholder-text: "https://redesk-signal.example.workers.dev";
+                                    text <=> root.server-setup-host;
+                                }
                             }
                         }
                     }
@@ -4260,7 +4285,8 @@ export component MainWindow inherits Window {
                 }
                 SettingsButton {
                     width: 92px; primary: true; text: root.server-setup-busy ? "Working..." : "Finish";
-                    enabled: root.server-setup-page == 1 && !root.server-setup-busy && !root.server-setup-review-open;
+                    enabled: root.server-setup-page == 1 && !root.server-setup-busy && !root.server-setup-review-open
+                        && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1);
                     clicked => {
                         root.server-setup-submit(root.server-setup-provider,
                             root.server-setup-cloudflare-method, root.server-setup-host,
