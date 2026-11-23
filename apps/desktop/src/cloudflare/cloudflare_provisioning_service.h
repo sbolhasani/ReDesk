@@ -53,7 +53,13 @@ using Progress = std::function<void(const char* step, const char* state)>;
 class CloudflareProvisioningService {
  public:
   // All calls are synchronous and may block. Invoke on a background thread.
-  Result ValidateToken(const std::string& api_token) const;
+  // Account-owned tokens (cfat_) require account-scoped verification.
+  // User tokens use the user endpoint. Legacy unprefixed tokens may be tried
+  // against both endpoints when the Account ID is known.
+  Result ValidateToken(const std::string& api_token,
+                       const std::string& account_id = {}) const;
+  static std::string TokenVerifyPath(const std::string& api_token,
+                                     const std::string& account_id = {});
   std::vector<Account> ListAccounts(const std::string& api_token,
                                     std::string* error) const;
   BackendStatus Inspect(const std::string& api_token,
