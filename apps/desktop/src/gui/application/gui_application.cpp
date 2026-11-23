@@ -1020,7 +1020,11 @@ struct GuiApplication::SlintUi {
     bool needs_account_id = false;
     bool needs_worker_url = false;
     bool discovery_attempt = false;
+    bool health_retry = false;
     std::string discovered_account_id;
+    // Used only for discarding stale read-only fetch responses when the user
+    // edits the token while a request is in progress; not logged or persisted.
+    std::string requested_token;
     cloudflare::BackendReview review;
   };
   std::future<ServerSetupResult> server_setup_future;
@@ -2068,6 +2072,31 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     ui_->server_setup_pending_token.clear();
     ui_->server_setup_review = {};
   });
+  main->on_server_setup_retry_health([this, main] {
+    if (ui_->server_setup_future.valid() || main->get_server_setup_busy()) {
+      main->set_server_setup_error("Another Cloudflare operation is still running.");
+      return;
+    }
+    if (!main->get_server_setup_review_open() ||
+        !ui_->server_setup_review.ok ||
+        ui_->server_setup_review.worker_url.empty()) {
+      main->set_server_setup_error("No Worker is available to check.");
+      return;
+    }
+    const auto previous = ui_->server_setup_review;
+    main->set_server_setup_busy(true);
+    main->set_server_setup_error("");
+    main->set_server_setup_status("Checking ReDesk Worker /health...");
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    ui_->server_setup_future = std::async(std::launch::async, [previous] {
+      SlintUi::ServerSetupResult response;
+      response.health_retry = true;
+      response.review = cloudflare::CloudflareProvisioningService{}.RetryHealth(previous);
+      response.ok = response.review.redesk_health;
+      response.message = response.review.explanation;
+      return response;
+    });
+  });
   main->on_server_setup_decision([this, main](int32_t action) {
     if (ui_->server_setup_future.valid()) {
       main->set_server_setup_error("Another Cloudflare operation is still running.");
@@ -2177,6 +2206,7 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       SlintUi::ServerSetupResult result;
       result.ok = discovery.review_ready;
       result.discovery_attempt = true;
+      result.requested_token = submitted;
       result.review_ready = discovery.review_ready;
       result.needs_account_id = discovery.needs_account_id;
       result.needs_worker_url = discovery.needs_worker_url;
@@ -2869,9 +2899,33 @@ void GuiApplication::Tick() {
     } else {
     window->set_server_setup_busy(false);
     window->set_server_setup_status("");
-    // Validation never consumes the entered token: users may correct
-    // permissions or revalidate without having to paste it again.
-    if (result.discovery_attempt) {
+    // A health retry only reads /health and refreshes the existing review.
+    // No Worker, TURN secret, or local configuration is changed on Retry.
+    if (result.health_retry) {
+      if (window->get_server_setup_review_open()) {
+        ui_->server_setup_review = result.review;
+        window->set_server_setup_review_description(result.message.c_str());
+        window->set_server_setup_review_can_use(result.review.redesk_health);
+        window->set_server_setup_review_can_update(result.review.update_safe);
+        window->set_server_setup_confirm_update(false);
+        window->set_server_setup_error("");
+        window->set_server_setup_status(result.review.redesk_health
+            ? "ReDesk /health verified successfully."
+            : "Health check failed. Retry or go back to change the Worker URL.");
+      }
+    } else if (result.discovery_attempt &&
+               result.requested_token !=
+                   std::string(window->get_server_setup_token())) {
+      // Ignore a fetch started for a previous token. Edits invalidate all
+      // suggested account and Worker fields without erasing the new token.
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
+      window->set_server_setup_need_account(false);
+      window->set_server_setup_need_worker_url(false);
+      window->set_server_setup_token_verified(false);
+      window->set_server_setup_error("");
+      window->set_server_setup_status("");
+    } else if (result.discovery_attempt) {
       window->set_server_setup_need_account(result.needs_account_id);
       window->set_server_setup_need_worker_url(result.needs_worker_url);
       window->set_server_setup_token_verified(result.review_ready ||
