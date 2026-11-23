@@ -529,6 +529,15 @@ function setup_targets()
             add_syslinks("User32", "Shell32", {public = true})
     end
 
+    target("cloudflare_provisioning_safety_test")
+        set_kind("binary")
+        set_default(false)
+        set_languages("c++20")
+        add_packages("cpp-httplib", "openssl3", "nlohmann_json")
+        add_includedirs("apps/desktop/src")
+        add_files("apps/desktop/tests/cloudflare_provisioning_safety_test.cpp",
+            "apps/desktop/src/cloudflare/cloudflare_provisioning_service.cpp")
+
     target("config_center")
         set_kind("object")
         add_deps("rd_log", "autostart")
