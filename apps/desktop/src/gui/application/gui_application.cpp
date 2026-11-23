@@ -2089,9 +2089,50 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     }
     if (provider == 1) {
       if (method == 1) {
-        main->set_server_setup_error(
-            "Automatic provisioning is not ready in this build. "
-            "Use Connect to Existing Worker or another server.");
+        if (ui_->server_setup_future.valid()) {
+          main->set_server_setup_error("Another Cloudflare operation is still running.");
+          return;
+        }
+        const std::string api_token(token);
+        const std::string submitted_account(account);
+        if (api_token.empty()) {
+          main->set_server_setup_error("Enter a Cloudflare API Token.");
+          return;
+        }
+        main->set_server_setup_token("");
+        main->set_server_setup_busy(true);
+        main->set_server_setup_status("Checking account and existing backend...");
+        ui_->server_setup_gallery_window = main->get_gallery_mode();
+        ui_->server_setup_future = std::async(std::launch::async,
+            [api_token, submitted_account] {
+          cloudflare::CloudflareProvisioningService service;
+          std::string account_id = submitted_account;
+          if (account_id.empty()) {
+            std::string error;
+            const auto accounts = service.ListAccounts(api_token, &error);
+            if (accounts.size() != 1) {
+              return SlintUi::ServerSetupResult{
+                  false, false, {},
+                  accounts.empty()
+                      ? "Cannot discover account; enter your Account ID. " + error
+                      : "More than one Cloudflare account found. Enter the desired Account ID."};
+            }
+            account_id = accounts.front().id;
+          }
+          std::string worker_url;
+          auto deployed = service.ProvisionNew(
+              api_token, account_id, cloudflare::kReDeskSignalingWorker,
+              &worker_url);
+          std::string address;
+          if (deployed.ok &&
+              !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+                  worker_url, nullptr, &address)) {
+            return SlintUi::ServerSetupResult{false, false, {},
+                                              "Invalid deployed Worker address"};
+          }
+          return SlintUi::ServerSetupResult{deployed.ok, false,
+                                            std::move(address), deployed.error};
+        });
         return;
       }
       if (ui_->server_setup_future.valid()) {
