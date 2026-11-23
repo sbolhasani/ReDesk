@@ -115,9 +115,7 @@ Result CloudflareProvisioningService::ValidateToken(
   // owned and account-owned legacy formats, so try account verification
   // after user verification without mistaking the first 403 for invalidity.
   if (token.rfind("cfat_", 0) != 0 &&
-      token.rfind("cfut_", 0) != 0 && IsHex32(account_id) &&
-      (result.error.find("HTTP 401") != std::string::npos ||
-       result.error.find("HTTP 403") != std::string::npos)) {
+      token.rfind("cfut_", 0) != 0 && IsHex32(account_id)) {
     const auto account_result = verify_at(
         "/client/v4/accounts/" + account_id + "/tokens/verify");
     if (account_result.ok) return account_result;
