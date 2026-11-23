@@ -34,10 +34,22 @@ struct BackendReview {
   bool redesk_health = false;
   bool turn_configured = false;
   bool existing_turn_key = false;
+  bool turn_keys_checked = false;
   bool update_safe = false;
   std::string account_id;
   std::string worker_url;
   std::string explanation;
+};
+// Read-only guided discovery: additional fields are requested only when the
+// relevant Cloudflare API cannot supply that information.
+struct BackendDiscovery {
+  bool token_verified = false;
+  bool needs_account_id = false;
+  bool needs_worker_url = false;
+  bool review_ready = false;
+  std::string account_id;
+  std::string message;
+  BackendReview review;
 };
 enum class ExistingAction { UseExisting, UpdateCode, ReinitializeData };
 struct SetupOptions {
@@ -69,6 +81,9 @@ class CloudflareProvisioningService {
   BackendReview ReviewAccount(const std::string& api_token,
                               const std::string& account_id,
                               const std::string& worker_url = {}) const;
+  BackendDiscovery DiscoverBackend(const std::string& api_token,
+                                   const std::string& account_id = {},
+                                   const std::string& worker_url = {}) const;
   static bool MayUpdateWorker(const BackendStatus& status);
   Result ConfigureExisting(const SetupOptions& options,
                            std::string* signal_address) const;
