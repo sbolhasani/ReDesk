@@ -175,14 +175,27 @@ BackendStatus CloudflareProvisioningService::Inspect(
                         verified.error;
     return status;
   }
-  if (settings.contains("bindings") && settings["bindings"].is_array()) {
-    for (const auto& binding : settings["bindings"]) {
-      if (binding.is_object() &&
-          binding.value("type", "") == "durable_object_namespace" &&
-          binding.value("name", "") == "SIGNAL_HUB" &&
-          binding.value("class_name", "") == "SignalHub") {
-        status.durable_object_binding = true;
-      }
+  if (!settings.is_object() || !settings.contains("bindings") ||
+      !settings["bindings"].is_array()) {
+    status.diagnostic = "Worker bindings could not be verified";
+    return status;
+  }
+  for (const auto& binding : settings["bindings"]) {
+    if (!binding.is_object()) {
+      status.unexpected_bindings = true;
+      continue;
+    }
+    const std::string type = binding.value("type", "");
+    const std::string name = binding.value("name", "");
+    if (type == "durable_object_namespace" && name == "SIGNAL_HUB" &&
+        binding.value("class_name", "") == "SignalHub") {
+      status.durable_object_binding = true;
+    } else if (type == "secret_text" && name == "TURN_KEY_ID") {
+      status.turn_key_id_binding = true;
+    } else if (type == "secret_text" && name == "TURN_API_TOKEN") {
+      status.turn_api_token_binding = true;
+    } else {
+      status.unexpected_bindings = true;
     }
   }
   if (!worker_url.empty()) {
@@ -197,6 +210,85 @@ BackendStatus CloudflareProvisioningService::Inspect(
         : "Worker exists but expected Durable Object binding is missing";
   }
   return status;
+}
+
+bool CloudflareProvisioningService::MayUpdateWorker(
+    const BackendStatus& status) {
+  return status.worker_exists && status.durable_object_binding &&
+         status.redesk_health && !status.unexpected_bindings;
+}
+
+BackendReview CloudflareProvisioningService::ReviewAccount(
+    const std::string& token, const std::string& account,
+    const std::string& provided_url) const {
+  BackendReview review;
+  review.account_id = account;
+  if (!IsHex32(account)) {
+    review.explanation = "Invalid Cloudflare Account ID";
+    return review;
+  }
+  const auto token_check = ValidateToken(token);
+  if (!token_check.ok) {
+    review.explanation = token_check.error;
+    return review;
+  }
+  auto client = Client(kApi);
+  std::string worker_url = provided_url;
+  if (worker_url.empty()) {
+    Json subdomain;
+    auto resolved = Decode(client.Get("/client/v4/accounts/" + account +
+                                    "/workers/subdomain", Authorization(token)),
+                           &subdomain);
+    if (!resolved.ok) {
+      review.explanation = "Could not find account workers.dev subdomain: " + resolved.error;
+      return review;
+    }
+    const std::string name = subdomain.is_object()
+        ? subdomain.value("subdomain", "") : "";
+    worker_url = "https://redesk-signal." + name + ".workers.dev";
+  }
+  if (!NormalizeWorkerUrl(worker_url, &review.worker_url, nullptr)) {
+    review.explanation = "Invalid Worker URL";
+    return review;
+  }
+  const auto backend = Inspect(token, account, review.worker_url);
+  if (!backend.worker_exists && backend.diagnostic != "Worker does not exist") {
+    review.explanation = backend.diagnostic;
+    return review;
+  }
+  review.worker_exists = backend.worker_exists;
+  review.redesk_health = backend.redesk_health;
+  review.durable_object_binding = backend.durable_object_binding;
+  review.turn_configured = backend.turn_configured;
+  review.update_safe = MayUpdateWorker(backend);
+  Json keys;
+  auto listed = Decode(client.Get("/client/v4/accounts/" + account +
+                                  "/calls/turn_keys", Authorization(token)), &keys);
+  if (!listed.ok || !keys.is_array()) {
+    review.explanation = listed.ok ? "Unexpected TURN key list" :
+                          "Unable to inspect TURN keys: " + listed.error;
+    return review;
+  }
+  for (const auto& key : keys) {
+    if (key.is_object() && key.value("name", "") == "redesk-signal") {
+      review.existing_turn_key = true;
+      break;
+    }
+  }
+  review.ok = true;
+  if (!review.worker_exists)
+    review.explanation = review.existing_turn_key
+        ? "Worker absent, but a ReDesk TURN key exists. Secret cannot be recovered from Cloudflare; installation is blocked to avoid duplicate keys."
+        : "No Worker or ReDesk TURN key found. Fresh installation is available.";
+  else if (!review.redesk_health || !review.durable_object_binding)
+    review.explanation = "Worker exists but ReDesk compatibility cannot be verified. Do not overwrite it.";
+  else if (!review.update_safe)
+    review.explanation = "ReDesk Worker found with additional bindings. Use Existing; automatic Update is disabled.";
+  else
+    review.explanation = review.turn_configured
+        ? "ReDesk Worker, SignalHub and TURN detected. Existing backend can be used or code updated without resetting data."
+        : "ReDesk Worker and SignalHub found. TURN is not configured; code update will not create or rotate keys.";
+  return review;
 }
 
 Result CloudflareProvisioningService::ConfigureExisting(
@@ -222,8 +314,8 @@ Result CloudflareProvisioningService::Deploy(
     if (options.existing_action != ExistingAction::UpdateCode ||
         !options.confirmed_worker_update)
       return {false, "Worker exists: explicitly confirm Update Worker first"};
-    if (!status.durable_object_binding || !status.redesk_health)
-      return {false, "Cannot prove existing Worker is compatible; refusing overwrite"};
+    if (!MayUpdateWorker(status))
+      return {false, "Worker compatibility/bindings cannot be proven; refusing overwrite"};
   } else if (status.diagnostic != "Worker does not exist") {
     return {false, "Could not safely determine Worker existence: " + status.diagnostic};
   }
@@ -243,12 +335,14 @@ Result CloudflareProvisioningService::Deploy(
       Json{{"tag", "v1"}, {"new_sqlite_classes", Json::array({"SignalHub"})}}
     });
   } else {
-    // Inheritance is explicit per binding, and strict mode rejects missing
-    // secrets instead of silently removing them during deployment.
-    metadata["bindings"].push_back(
-        Json{{"type", "inherit"}, {"name", "TURN_KEY_ID"}});
-    metadata["bindings"].push_back(
-        Json{{"type", "inherit"}, {"name", "TURN_API_TOKEN"}});
+    // Inherit only existing secret bindings; strict mode prevents
+    // concurrent deletion from silently dropping a credential.
+    if (status.turn_key_id_binding)
+      metadata["bindings"].push_back(
+          Json{{"type", "inherit"}, {"name", "TURN_KEY_ID"}});
+    if (status.turn_api_token_binding)
+      metadata["bindings"].push_back(
+          Json{{"type", "inherit"}, {"name", "TURN_API_TOKEN"}});
   }
   httplib::UploadFormDataItems parts = {
     {"metadata", metadata.dump(), "", "application/json"},
