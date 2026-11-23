@@ -1014,9 +1014,9 @@ struct GuiApplication::SlintUi {
   struct ServerSetupResult {
     bool ok = false;
     bool token_validation = false;
-    bool review_ready = false;
     std::string endpoint;
     std::string message;
+    bool review_ready = false;
     cloudflare::BackendReview review;
   };
   std::future<ServerSetupResult> server_setup_future;
@@ -2135,7 +2135,7 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
               url, nullptr, &endpoint)) {
         result = {false, "Invalid Worker URL after deployment"};
       }
-      return SlintUi::ServerSetupResult{result.ok, false, false,
+      return SlintUi::ServerSetupResult{result.ok, false,
                                         std::move(endpoint), result.error};
     });
   });
