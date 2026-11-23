@@ -261,6 +261,84 @@ Result CloudflareProvisioningService::Deploy(
   return Decode(response);
 }
 
+Result CloudflareProvisioningService::ProvisionNew(
+    const std::string& token, const std::string& account,
+    const std::string& script, std::string* worker_url,
+    Progress progress) const {
+  if (!IsHex32(account) || token.empty() || script.empty())
+    return {false, "Provide a valid token, Account ID and bundled Worker"};
+  if (progress) progress("Validating Cloudflare Account", "Running");
+  auto validity = ValidateToken(token);
+  if (!validity.ok) return validity;
+
+  if (progress) progress("Checking Existing Worker", "Running");
+  auto prior = Inspect(token, account);
+  if (prior.worker_exists)
+    return {false, "Worker already exists. Use Existing Backend or confirm an update."};
+  if (prior.diagnostic != "Worker does not exist")
+    return {false, "Cannot safely determine whether Worker exists: " + prior.diagnostic};
+
+  auto client = Client(kApi);
+  if (progress) progress("Configuring TURN", "Running");
+  // Cloudflare cannot reveal existing TURN secrets. Do not generate duplicates
+  // or rotate keys that other installations may already be using.
+  Json keys;
+  const auto turn_path = "/client/v4/accounts/" + account + "/calls/turn_keys";
+  auto listed = Decode(client.Get(turn_path, Authorization(token)), &keys);
+  if (!listed.ok) return {false, "Could not inspect existing TURN keys: " + listed.error};
+  if (!keys.is_array()) return {false, "Unexpected TURN key list"};
+  for (const auto& key : keys) {
+    if (key.is_object() && key.value("name", "") == "redesk-signal")
+      return {false, "Existing ReDesk TURN key found: cannot recover secret or safely rotate it"};
+  }
+
+  Json subdomain;
+  auto resolved = Decode(client.Get("/client/v4/accounts/" + account +
+                                    "/workers/subdomain", Authorization(token)),
+                         &subdomain);
+  if (!resolved.ok) return {false, "Could not resolve Workers subdomain: " + resolved.error};
+  const std::string name = subdomain.is_object()
+      ? subdomain.value("subdomain", "") : "";
+  std::string base_url;
+  const std::string url = "https://redesk-signal." + name + ".workers.dev";
+  if (!NormalizeWorkerUrl(url, &base_url, nullptr))
+    return {false, "Cloudflare account has no valid workers.dev subdomain"};
+
+  if (progress) progress("Deploying Worker", "Running");
+  SetupOptions options;
+  options.account_id = account;
+  auto deployment = Deploy(token, options, script);
+  if (!deployment.ok) return deployment;
+  auto enabled = Decode(client.Post(Prefix(account) + "/subdomain",
+      Authorization(token),
+      Json{{"enabled", true}, {"previews_enabled", false}}.dump(),
+      "application/json"));
+  if (!enabled.ok) return {false, "Worker deployed but workers.dev activation failed: " + enabled.error};
+
+  // Create a dedicated key only after the Worker is deployed. No existing key
+  // is removed. If a later step fails, report partial setup, never claim
+  // success or silently create a second key on retry.
+  if (progress) progress("Configuring TURN", "Running");
+  Json key;
+  auto created = Decode(client.Post(turn_path, Authorization(token),
+      Json{{"name", "redesk-signal"}}.dump(), "application/json"), &key);
+  if (!created.ok) return {false, "Worker deployed but TURN creation failed: " + created.error};
+  const auto uid = key.value("uid", "");
+  const auto secret = key.value("key", key.value("secret", ""));
+  auto secrets = AddTurnSecrets(token, account, uid, secret);
+  if (!secrets.ok)
+    return {false, "Worker deployed and TURN key created, but secret installation failed: " +
+                   secrets.error + ". Check Cloudflare before retrying."};
+
+  if (progress) progress("Verifying Backend", "Running");
+  auto health = CheckHealth(base_url);
+  if (!health.redesk_health || !health.turn_configured)
+    return {false, "Worker deployed but TURN/health verification failed; check Cloudflare state"};
+  if (worker_url) *worker_url = base_url;
+  if (progress) progress("Verifying Backend", "Completed");
+  return {true, {}};
+}
+
 Result CloudflareProvisioningService::AddTurnSecrets(
     const std::string& token, const std::string& account,
     const std::string& key_id, const std::string& secret) const {
