@@ -1017,6 +1017,10 @@ struct GuiApplication::SlintUi {
     std::string endpoint;
     std::string message;
     bool review_ready = false;
+    bool needs_account_id = false;
+    bool needs_worker_url = false;
+    bool discovery_attempt = false;
+    std::string discovered_account_id;
     cloudflare::BackendReview review;
   };
   std::future<ServerSetupResult> server_setup_future;
@@ -2075,9 +2079,8 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       return;
     }
     if (action == 0) {
-      if (!review.worker_exists || !review.redesk_health ||
-          !review.durable_object_binding) {
-        main->set_server_setup_error("Existing Worker is not verified as compatible.");
+      if (!review.worker_exists || !review.redesk_health) {
+        main->set_server_setup_error("Existing Worker health has not been verified.");
         return;
       }
       std::string endpoint;
@@ -2162,14 +2165,25 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       return;
     }
     main->set_server_setup_error("");
-    main->set_server_setup_status("Validating API token...");
+    main->set_server_setup_status("Fetching Cloudflare account and backend information...");
     main->set_server_setup_busy(true);
     ui_->server_setup_gallery_window = main->get_gallery_mode();
     const std::string account_id(main->get_server_setup_account());
-    ui_->server_setup_future = std::async(std::launch::async, [submitted, account_id] {
-      const auto check =
-          cloudflare::CloudflareProvisioningService{}.ValidateToken(submitted, account_id);
-      return SlintUi::ServerSetupResult{check.ok, true, {}, check.error};
+    const std::string worker_url(main->get_server_setup_host());
+    ui_->server_setup_future = std::async(std::launch::async,
+        [submitted, account_id, worker_url] {
+      auto discovery = cloudflare::CloudflareProvisioningService{}.DiscoverBackend(
+          submitted, account_id, worker_url);
+      SlintUi::ServerSetupResult result;
+      result.ok = discovery.review_ready;
+      result.discovery_attempt = true;
+      result.review_ready = discovery.review_ready;
+      result.needs_account_id = discovery.needs_account_id;
+      result.needs_worker_url = discovery.needs_worker_url;
+      result.discovered_account_id = std::move(discovery.account_id);
+      result.message = std::move(discovery.message);
+      result.review = std::move(discovery.review);
+      return result;
     });
   });
   main->on_server_setup_submit([this, main](
@@ -2857,7 +2871,33 @@ void GuiApplication::Tick() {
     window->set_server_setup_status("");
     // Validation never consumes the entered token: users may correct
     // permissions or revalidate without having to paste it again.
-    if (result.token_validation) {
+    if (result.discovery_attempt) {
+      window->set_server_setup_need_account(result.needs_account_id);
+      window->set_server_setup_need_worker_url(result.needs_worker_url);
+      window->set_server_setup_token_verified(result.review_ready ||
+                                               !result.discovered_account_id.empty());
+      if (!result.discovered_account_id.empty())
+        window->set_server_setup_account(result.discovered_account_id.c_str());
+      if (result.review_ready) {
+        ui_->server_setup_pending_token =
+            std::string(window->get_server_setup_token());
+        ui_->server_setup_review = result.review;
+        window->set_server_setup_review_open(true);
+        window->set_server_setup_review_description(result.message.c_str());
+        window->set_server_setup_review_url(result.review.worker_url.c_str());
+        window->set_server_setup_review_existing(result.review.worker_exists);
+        window->set_server_setup_review_can_use(
+            result.review.worker_exists && result.review.redesk_health);
+        window->set_server_setup_review_can_update(result.review.update_safe);
+        window->set_server_setup_review_turn_key(result.review.existing_turn_key);
+        window->set_server_setup_confirm_update(false);
+        window->set_server_setup_error("");
+      } else {
+        ui_->server_setup_pending_token.clear();
+        ui_->server_setup_review = {};
+        window->set_server_setup_error(result.message.c_str());
+      }
+    } else if (result.token_validation) {
       window->set_server_setup_error(result.ok ? "" : result.message.c_str());
       window->set_server_setup_status(result.ok ? "Cloudflare API token is active." : "");
     } else if (result.review_ready) {
@@ -2867,8 +2907,7 @@ void GuiApplication::Tick() {
       window->set_server_setup_review_url(result.review.worker_url.c_str());
       window->set_server_setup_review_existing(result.review.worker_exists);
       window->set_server_setup_review_can_use(
-          result.review.worker_exists && result.review.redesk_health &&
-          result.review.durable_object_binding);
+          result.review.worker_exists && result.review.redesk_health);
       window->set_server_setup_review_can_update(result.review.update_safe);
       window->set_server_setup_review_turn_key(result.review.existing_turn_key);
       window->set_server_setup_confirm_update(false);
