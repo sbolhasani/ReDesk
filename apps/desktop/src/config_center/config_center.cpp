@@ -487,8 +487,16 @@ ConfigCenter::SERVER_PROVIDER ConfigCenter::GetServerProvider() const {
 
 int ConfigCenter::SetSelfHosted(bool enabled) {
   if (enabled && (signal_server_host_.empty() || signal_server_port_ < 1 || signal_server_port_ > 65535)) return -1;
-  if (StoreValues({{"enable_self_hosted", enabled ? "true" : "false"}}) != 0) return -1;
+  // Legacy Settings uses this setter for unrelated preferences too. Preserve
+  // the Cloudflare provider when the enabled state is unchanged.
+  if (enabled == enable_self_hosted_) return 0;
+  const auto provider = enabled ? SERVER_PROVIDER::CUSTOM : SERVER_PROVIDER::PUBLIC;
+  if (StoreValues({{"enable_self_hosted", enabled ? "true" : "false"},
+                   {"server_provider", enabled ? "custom" : "public"},
+                   {"server_selection_completed", "true"}}) != 0) return -1;
   enable_self_hosted_ = enabled;
+  server_provider_ = provider;
+  server_selection_completed_ = true;
   return 0;
 }
 
