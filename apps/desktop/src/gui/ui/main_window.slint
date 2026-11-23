@@ -4074,7 +4074,14 @@ export component MainWindow inherits Window {
                 SettingsButton {
                     width: parent.width; height: 64px; align-left: true;
                     text: "Cloudflare - your own signaling backend";
-                    clicked => { root.server-setup-provider = 1; root.server-setup-page = 1; root.server-setup-error = ""; }
+                    clicked => {
+                        root.server-setup-provider = 1;
+                        root.server-setup-cloudflare-method = 1;
+                        root.server-setup-need-account = false;
+                        root.server-setup-need-worker-url = false;
+                        root.server-setup-page = 1;
+                        root.server-setup-error = "";
+                    }
                 }
                 SettingsButton {
                     width: parent.width; height: 64px; align-left: true;
@@ -4136,11 +4143,15 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             width: parent.width; height: 32px; vertical-stretch: 0; spacing: 8px;
                             SettingsButton {
-                                width: (parent.width - 8px) / 2; height: 32px; text: "Existing Worker";
+                                width: (parent.width - 8px) / 2; height: 32px;
+                                primary: root.server-setup-cloudflare-method == 0;
+                                text: "Existing Worker";
                                 clicked => { root.server-setup-cloudflare-method = 0; root.server-setup-error = ""; root.server-setup-status = ""; }
                             }
                             SettingsButton {
-                                width: (parent.width - 8px) / 2; height: 32px; text: "Automatic (API Token)";
+                                width: (parent.width - 8px) / 2; height: 32px;
+                                primary: root.server-setup-cloudflare-method == 1;
+                                text: "Automatic (API Token)";
                                 clicked => { root.server-setup-cloudflare-method = 1; root.server-setup-error = ""; root.server-setup-status = ""; }
                             }
                         }
