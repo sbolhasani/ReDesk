@@ -31,8 +31,10 @@ httplib::Headers Authorization(const std::string& token) {
 // echo input or secret values in diagnostic fields.
 Result Decode(const httplib::Result& response, Json* result = nullptr) {
   if (!response) return {false, "Network/TLS error contacting Cloudflare"};
-  if (response->status == 401 || response->status == 403)
-    return {false, "Cloudflare token is invalid or lacks permissions"};
+  if (response->status == 401)
+    return {false, "Cloudflare returned HTTP 401 (authentication failed). Check the API Token."};
+  if (response->status == 403)
+    return {false, "Cloudflare returned HTTP 403 (permission denied). Check the token's Account scope and API permissions."};
   if (response->status == 429) return {false, "Cloudflare rate limit exceeded"};
   if (response->status < 200 || response->status >= 300)
     return {false, "Cloudflare API HTTP " + std::to_string(response->status)};
@@ -82,15 +84,48 @@ bool CloudflareProvisioningService::NormalizeWorkerUrl(
   return true;
 }
 
-Result CloudflareProvisioningService::ValidateToken(const std::string& token) const {
+std::string CloudflareProvisioningService::TokenVerifyPath(
+    const std::string& token, const std::string& account_id) {
+  if (token.rfind("cfat_", 0) == 0) {
+    if (!IsHex32(account_id)) return {};
+    return "/client/v4/accounts/" + account_id + "/tokens/verify";
+  }
+  return "/client/v4/user/tokens/verify";
+}
+
+Result CloudflareProvisioningService::ValidateToken(
+    const std::string& token, const std::string& account_id) const {
   if (token.empty()) return {false, "Cloudflare API Token required"};
+  const std::string verify_path = TokenVerifyPath(token, account_id);
+  if (verify_path.empty())
+    return {false, "Account-owned API Token requires a valid 32-character Account ID."};
+
   auto client = Client(kApi);
-  Json data;
-  auto response = client.Get("/client/v4/user/tokens/verify", Authorization(token));
-  auto outcome = Decode(response, &data);
-  if (!outcome.ok) return outcome;
-  return data.value("status", "") == "active"
-      ? Result{true, {}} : Result{false, "Cloudflare API Token is not active"};
+  auto verify_at = [&client, &token](const std::string& path) -> Result {
+    Json data;
+    auto checked = Decode(client.Get(path, Authorization(token)), &data);
+    if (!checked.ok) return checked;
+    if (!data.is_object() || data.value("status", "") != "active")
+      return {false, "Cloudflare API Token is not active"};
+    return {true, {}};
+  };
+  auto result = verify_at(verify_path);
+  if (result.ok) return result;
+  // Old (unprefixed) tokens are ambiguous. Cloudflare supports both user-
+  // owned and account-owned legacy formats, so try account verification
+  // after user verification without mistaking the first 403 for invalidity.
+  if (token.rfind("cfat_", 0) != 0 &&
+      token.rfind("cfut_", 0) != 0 && IsHex32(account_id) &&
+      (result.error.find("HTTP 401") != std::string::npos ||
+       result.error.find("HTTP 403") != std::string::npos)) {
+    const auto account_result = verify_at(
+        "/client/v4/accounts/" + account_id + "/tokens/verify");
+    if (account_result.ok) return account_result;
+    return {false,
+        "Neither user nor account token verification succeeded. "
+        "Check token status, Account ID and permission scope."};
+  }
+  return result;
 }
 
 std::vector<Account> CloudflareProvisioningService::ListAccounts(
@@ -227,7 +262,7 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
     review.explanation = "Invalid Cloudflare Account ID";
     return review;
   }
-  const auto token_check = ValidateToken(token);
+  const auto token_check = ValidateToken(token, account);
   if (!token_check.ok) {
     review.explanation = token_check.error;
     return review;
@@ -240,7 +275,13 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
                                     "/workers/subdomain", Authorization(token)),
                            &subdomain);
     if (!resolved.ok) {
-      review.explanation = "Could not find account workers.dev subdomain: " + resolved.error;
+      // Token verification already succeeded. A subdomain read failure is
+      // a separate scope/endpoint problem, not evidence of a bad token.
+      review.explanation =
+          "API Token verified, but Cloudflare could not read the account "
+          "workers.dev subdomain. " + resolved.error +
+          " Enter the existing Worker HTTPS URL in the optional Worker URL "
+          "field below and retry, or grant Workers Scripts Read.";
       return review;
     }
     const std::string name = subdomain.is_object()
@@ -362,7 +403,7 @@ Result CloudflareProvisioningService::ProvisionNew(
   if (!IsHex32(account) || token.empty() || script.empty())
     return {false, "Provide a valid token, Account ID and bundled Worker"};
   if (progress) progress("Validating Cloudflare Account", "Running");
-  auto validity = ValidateToken(token);
+  auto validity = ValidateToken(token, account);
   if (!validity.ok) return validity;
 
   if (progress) progress("Checking Existing Worker", "Running");
