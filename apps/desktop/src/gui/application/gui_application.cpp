@@ -2905,6 +2905,7 @@ void GuiApplication::Tick() {
       if (window->get_server_setup_review_open()) {
         ui_->server_setup_review = result.review;
         window->set_server_setup_review_description(result.message.c_str());
+        window->set_server_setup_review_existing(result.review.worker_exists);
         window->set_server_setup_review_can_use(result.review.redesk_health);
         window->set_server_setup_review_can_update(result.review.update_safe);
         window->set_server_setup_confirm_update(false);
