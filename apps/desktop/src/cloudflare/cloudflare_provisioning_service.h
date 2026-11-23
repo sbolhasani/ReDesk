@@ -17,12 +17,27 @@ struct BackendStatus {
   bool redesk_health = false;
   bool durable_object_binding = false;
   bool turn_configured = false;
+  bool turn_key_id_binding = false;
+  bool turn_api_token_binding = false;
+  bool unexpected_bindings = false;
   std::string url;
   std::string diagnostic;
 };
 struct Result {
   bool ok = false;
   std::string error;
+};
+struct BackendReview {
+  bool ok = false;
+  bool worker_exists = false;
+  bool durable_object_binding = false;
+  bool redesk_health = false;
+  bool turn_configured = false;
+  bool existing_turn_key = false;
+  bool update_safe = false;
+  std::string account_id;
+  std::string worker_url;
+  std::string explanation;
 };
 enum class ExistingAction { UseExisting, UpdateCode, ReinitializeData };
 struct SetupOptions {
@@ -45,6 +60,10 @@ class CloudflareProvisioningService {
                         const std::string& account_id,
                         const std::string& worker_url = {}) const;
   BackendStatus CheckHealth(const std::string& worker_url) const;
+  BackendReview ReviewAccount(const std::string& api_token,
+                              const std::string& account_id,
+                              const std::string& worker_url = {}) const;
+  static bool MayUpdateWorker(const BackendStatus& status);
   Result ConfigureExisting(const SetupOptions& options,
                            std::string* signal_address) const;
   // Fresh deployment only. Existing Worker/TURN state always requires a
