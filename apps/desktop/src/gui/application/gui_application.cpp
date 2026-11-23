@@ -2831,6 +2831,14 @@ void GuiApplication::Tick() {
           std::future_status::ready) {
     auto result = ui_->server_setup_future.get();
     auto& window = ui_->Window(ui_->server_setup_gallery_window);
+    // A cancelled wizard may still have a read-only network request in
+    // flight. Discard its completion rather than reopening the review.
+    if (!window->get_server_setup_open()) {
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
+      window->set_server_setup_busy(false);
+      window->set_server_setup_token("");
+    } else {
     window->set_server_setup_busy(false);
     window->set_server_setup_status("");
     // Drop the validation token from the Slint model as soon as the request completes.
@@ -2866,6 +2874,7 @@ void GuiApplication::Tick() {
       window->set_server_setup_review_open(false);
       window->set_server_setup_open(false);
       ApplySettingsFromConfig(true);
+    }
     }
   }
 #if _WIN32
