@@ -2165,8 +2165,10 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     main->set_server_setup_status("Validating API token...");
     main->set_server_setup_busy(true);
     ui_->server_setup_gallery_window = main->get_gallery_mode();
-    ui_->server_setup_future = std::async(std::launch::async, [submitted] {
-      const auto check = cloudflare::CloudflareProvisioningService{}.ValidateToken(submitted);
+    const std::string account_id(main->get_server_setup_account());
+    ui_->server_setup_future = std::async(std::launch::async, [submitted, account_id] {
+      const auto check =
+          cloudflare::CloudflareProvisioningService{}.ValidateToken(submitted, account_id);
       return SlintUi::ServerSetupResult{check.ok, true, {}, check.error};
     });
   });
@@ -2187,11 +2189,13 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
         }
         const std::string api_token(token);
         const std::string submitted_account(account);
+        const std::string provided_worker_url(host);
         if (api_token.empty()) {
           main->set_server_setup_error("Enter a Cloudflare API Token.");
           return;
         }
-        main->set_server_setup_token("");
+        // Keep the input intact during asynchronous preflight. It is needed
+        // for retry after a scope error, network issue or invalid Account ID.
         ui_->server_setup_pending_token = api_token;
         ui_->server_setup_review = {};
         main->set_server_setup_review_open(false);
@@ -2199,7 +2203,7 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
         main->set_server_setup_status("Inspecting Cloudflare account, Worker and TURN (read only)...");
         ui_->server_setup_gallery_window = main->get_gallery_mode();
         ui_->server_setup_future = std::async(std::launch::async,
-            [api_token, submitted_account] {
+            [api_token, submitted_account, provided_worker_url] {
           cloudflare::CloudflareProvisioningService service;
           std::string account_id = submitted_account;
           if (account_id.empty()) {
@@ -2214,7 +2218,8 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
             }
             account_id = accounts.front().id;
           }
-          auto review = service.ReviewAccount(api_token, account_id);
+          auto review =
+              service.ReviewAccount(api_token, account_id, provided_worker_url);
           SlintUi::ServerSetupResult result;
           result.ok = review.ok;
           result.review_ready = review.ok;
@@ -2869,6 +2874,8 @@ void GuiApplication::Tick() {
       window->set_server_setup_confirm_update(false);
       window->set_server_setup_error("");
     } else if (!result.ok) {
+      // A failed Finish must preserve the token and Account ID so the user
+      // can fix permissions or the Worker URL and retry without pasting again.
       ui_->server_setup_pending_token.clear();
       ui_->server_setup_review = {};
       window->set_server_setup_error(result.message.c_str());
