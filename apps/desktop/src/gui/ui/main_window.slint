@@ -3988,7 +3988,7 @@ export component MainWindow inherits Window {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: min(520px, parent.width - 30px);
-            height: min(510px, parent.height - 24px);
+            height: min(540px, parent.height - 24px);
             background: #f8fafc;
             outline-color: UiSurface.edge;
             TouchArea { scroll-event(event) => { accept } }
@@ -4003,8 +4003,15 @@ export component MainWindow inherits Window {
                 text: "Select where ReDesk connects for signaling. Existing device identity is preserved.";
                 font-size: 12px; wrap: word-wrap; color: WorkbenchStyle.muted;
             }
-            if root.server-setup-review-open: VerticalLayout {
-                x: 22px; y: 107px; width: parent.width - 44px; spacing: 12px;
+            if root.server-setup-review-open: ScrollView {
+                x: 22px; y: 107px; width: parent.width - 44px;
+                height: max(90px, parent.height -
+                    (root.server-setup-error != "" || root.server-setup-status != "" ? 254px : 183px));
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                viewport-height: server-review-content.preferred-height;
+                server-review-content := VerticalLayout {
+                    width: parent.width; padding: 0px; spacing: 12px;
                 Text {
                     text: "Worker: redesk-signal";
                     color: WorkbenchStyle.text; font-weight: 600; font-size: 13px;
@@ -4057,6 +4064,7 @@ export component MainWindow inherits Window {
                     text: "Overwrite / Reset Durable Object data is unavailable until a verified, backup-capable procedure is implemented.";
                     color: WorkbenchStyle.muted; wrap: word-wrap; font-size: 11px;
                 }
+                }
             }
             if root.server-setup-page == 0 && !root.server-setup-review-open: VerticalLayout {
                 x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
@@ -4076,71 +4084,140 @@ export component MainWindow inherits Window {
                     clicked => { root.server-setup-provider = 2; root.server-setup-page = 1; root.server-setup-error = ""; }
                 }
             }
-            if root.server-setup-page == 1 && !root.server-setup-review-open: Rectangle {
-                x: 22px; y: 110px; width: parent.width - 44px; height: 260px;
-                if root.server-setup-provider == 0: Text {
-                    width: parent.width; height: 75px;
-                    text: "Use the public CrossDesk signaling service. No Cloudflare API token or backend setup is required.";
-                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 13px;
-                }
-                if root.server-setup-provider == 2: VerticalLayout {
-                    width: parent.width; spacing: 8px;
-                    Text { text: "Server host or signaling URL"; color: WorkbenchStyle.text; }
-                    RoundedLineEdit { width: parent.width; text <=> root.server-setup-host; }
-                    Text { text: "Signal port"; color: WorkbenchStyle.text; }
-                    RoundedLineEdit { width: parent.width; text <=> root.server-setup-port; input-type: InputType.number; }
-                }
-                if root.server-setup-provider == 1: VerticalLayout {
-                    width: parent.width; spacing: 9px;
-                    HorizontalLayout {
-                        height: 32px; spacing: 8px;
-                        SettingsButton {
-                            width: parent.width / 2 - 4px; text: "Existing Worker";
-                            clicked => { root.server-setup-cloudflare-method = 0; root.server-setup-error = ""; }
-                        }
-                        SettingsButton {
-                            width: parent.width / 2 - 4px; text: "Automatic (API Token)";
-                            clicked => { root.server-setup-cloudflare-method = 1; root.server-setup-error = ""; }
-                        }
+            // Keep fields in a measured, scrollable layout. The dedicated
+            // feedback area below is never laid over a form input.
+            if root.server-setup-page == 1 && !root.server-setup-review-open: ScrollView {
+                x: 22px; y: 110px; width: parent.width - 44px;
+                height: max(90px, parent.height -
+                    (root.server-setup-error != "" || root.server-setup-status != "" ? 257px : 189px));
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                viewport-height: server-configuration-content.preferred-height;
+                server-configuration-content := VerticalLayout {
+                    width: parent.width; padding: 0px; spacing: 10px;
+                    if root.server-setup-provider == 0: Text {
+                        width: parent.width; height: 75px; vertical-stretch: 0;
+                        text: "Use the public CrossDesk signaling service. No Cloudflare API token or backend setup is required.";
+                        wrap: word-wrap; color: WorkbenchStyle.text; font-size: 13px;
                     }
-                    if root.server-setup-cloudflare-method == 0: VerticalLayout {
-                        spacing: 7px;
-                        Text { text: "HTTPS Worker URL"; color: WorkbenchStyle.text; }
+                    if root.server-setup-provider == 2: VerticalLayout {
+                        width: parent.width; height: 142px; vertical-stretch: 0; spacing: 8px;
+                        Text {
+                            height: 20px; vertical-stretch: 0;
+                            text: "Server host or signaling URL"; color: WorkbenchStyle.text;
+                            vertical-alignment: center;
+                        }
                         RoundedLineEdit {
-                            width: parent.width;
-                            placeholder-text: "https://redesk-signal.example.workers.dev";
+                            width: parent.width; height: 36px; vertical-stretch: 0;
                             text <=> root.server-setup-host;
                         }
                         Text {
-                            text: "ReDesk will verify /health before saving the WSS /signal endpoint.";
-                            wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 11px;
+                            height: 20px; vertical-stretch: 0;
+                            text: "Signal port"; color: WorkbenchStyle.text;
+                            vertical-alignment: center;
+                        }
+                        RoundedLineEdit {
+                            width: parent.width; height: 36px; vertical-stretch: 0;
+                            text <=> root.server-setup-port; input-type: InputType.number;
                         }
                     }
-                    if root.server-setup-cloudflare-method == 1: VerticalLayout {
-                        spacing: 7px;
-                        Text { text: "Cloudflare API Token"; color: WorkbenchStyle.text; }
-                        RoundedLineEdit {
-                            width: parent.width; text <=> root.server-setup-token;
-                            input-type: root.server-setup-reveal-token ? InputType.text : InputType.password;
-                        }
+                    if root.server-setup-provider == 1: VerticalLayout {
+                        width: parent.width;
+                        height: root.server-setup-cloudflare-method == 1 ? 218px : 152px;
+                        vertical-stretch: 0; spacing: 8px;
                         HorizontalLayout {
-                            height: 30px; spacing: 8px;
-                            SettingsButton { width: 94px; text: root.server-setup-reveal-token ? "Hide" : "Show"; clicked => { root.server-setup-reveal-token = !root.server-setup-reveal-token; } }
-                            SettingsButton { width: 125px; text: "Validate Token"; enabled: !root.server-setup-busy; clicked => { root.server-setup-validate-token(root.server-setup-token); } }
-                            SettingsButton { width: 125px; text: "Create Token"; clicked => { root.server-setup-create-token(); } }
+                            width: parent.width; height: 32px; vertical-stretch: 0; spacing: 8px;
+                            SettingsButton {
+                                width: (parent.width - 8px) / 2; height: 32px; text: "Existing Worker";
+                                clicked => { root.server-setup-cloudflare-method = 0; root.server-setup-error = ""; root.server-setup-status = ""; }
+                            }
+                            SettingsButton {
+                                width: (parent.width - 8px) / 2; height: 32px; text: "Automatic (API Token)";
+                                clicked => { root.server-setup-cloudflare-method = 1; root.server-setup-error = ""; root.server-setup-status = ""; }
+                            }
                         }
-                        Text { text: "Account ID (optional when the token can list accounts)"; color: WorkbenchStyle.text; font-size: 11px; }
-                        RoundedLineEdit { width: parent.width; text <=> root.server-setup-account; }
+                        if root.server-setup-cloudflare-method == 0: VerticalLayout {
+                            width: parent.width; height: 112px; vertical-stretch: 0; spacing: 7px;
+                            Text {
+                                height: 18px; vertical-stretch: 0;
+                                text: "HTTPS Worker URL"; color: WorkbenchStyle.text;
+                                vertical-alignment: center;
+                            }
+                            RoundedLineEdit {
+                                width: parent.width; height: 36px; vertical-stretch: 0;
+                                placeholder-text: "https://redesk-signal.example.workers.dev";
+                                text <=> root.server-setup-host;
+                            }
+                            Text {
+                                height: 38px; vertical-stretch: 0;
+                                text: "ReDesk will verify /health before saving the WSS /signal endpoint.";
+                                wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 11px;
+                            }
+                        }
+                        if root.server-setup-cloudflare-method == 1: VerticalLayout {
+                            width: parent.width; height: 174px; vertical-stretch: 0; spacing: 7px;
+                            Text {
+                                height: 18px; vertical-stretch: 0;
+                                text: "Cloudflare API Token"; color: WorkbenchStyle.text;
+                                vertical-alignment: center;
+                            }
+                            HorizontalLayout {
+                                width: parent.width; height: 36px; vertical-stretch: 0; spacing: 8px;
+                                RoundedLineEdit {
+                                    width: parent.width - 88px; height: 36px;
+                                    text <=> root.server-setup-token;
+                                    input-type: root.server-setup-reveal-token ? InputType.text : InputType.password;
+                                }
+                                SettingsButton {
+                                    width: 80px; height: 36px;
+                                    text: root.server-setup-reveal-token ? "Hide" : "Show";
+                                    clicked => { root.server-setup-reveal-token = !root.server-setup-reveal-token; }
+                                }
+                            }
+                            HorizontalLayout {
+                                width: parent.width; height: 34px; vertical-stretch: 0; spacing: 8px;
+                                SettingsButton {
+                                    width: 130px; height: 34px; text: "Validate Token";
+                                    enabled: !root.server-setup-busy;
+                                    clicked => { root.server-setup-validate-token(root.server-setup-token); }
+                                }
+                                SettingsButton {
+                                    width: 130px; height: 34px; text: "Create Token";
+                                    enabled: !root.server-setup-busy;
+                                    clicked => { root.server-setup-create-token(); }
+                                }
+                            }
+                            Text {
+                                height: 19px; vertical-stretch: 0;
+                                text: "Account ID (optional when the token can list accounts)";
+                                color: WorkbenchStyle.text; font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                            RoundedLineEdit {
+                                width: parent.width; height: 36px; vertical-stretch: 0;
+                                text <=> root.server-setup-account;
+                            }
+                        }
                     }
                 }
             }
-            if root.server-setup-error != "": Text {
-                x: 22px; y: parent.height - 118px; width: parent.width - 44px; height: 44px;
-                text: root.server-setup-error; wrap: word-wrap; color: #bb3333; font-size: 11px;
-            }
-            if root.server-setup-status != "": Text {
-                x: 22px; y: parent.height - 95px; width: parent.width - 44px; height: 20px;
-                text: root.server-setup-status; overflow: elide; color: WorkbenchStyle.muted; font-size: 11px;
+            // Feedback always has its own reserved row above footer actions.
+            // It must not overlap the Account ID input, even at small heights.
+            if root.server-setup-error != "" || root.server-setup-status != "": Rectangle {
+                x: 22px; y: parent.height - 134px;
+                width: parent.width - 44px; height: 60px;
+                background: root.server-setup-error != "" ? #fff2f2 : #edf4ff;
+                border-width: 1px;
+                border-color: root.server-setup-error != "" ? #ebc8c8 : #c9dbf5;
+                border-radius: UiRadius.control;
+                Text {
+                    x: 12px; y: 8px; width: parent.width - 24px; height: parent.height - 16px;
+                    text: root.server-setup-error != "" ? root.server-setup-error : root.server-setup-status;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    font-size: 11px;
+                    color: root.server-setup-error != "" ? #b33131 : WorkbenchStyle.text;
+                }
             }
             HorizontalLayout {
                 x: 22px; y: parent.height - 56px; width: parent.width - 44px; height: 34px; spacing: 10px;
