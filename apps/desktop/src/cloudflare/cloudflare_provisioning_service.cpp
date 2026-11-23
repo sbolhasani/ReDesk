@@ -243,15 +243,21 @@ Result CloudflareProvisioningService::Deploy(
       Json{{"tag", "v1"}, {"new_sqlite_classes", Json::array({"SignalHub"})}}
     });
   } else {
-    metadata["bindings_inherit"] = {{"TURN_KEY_ID", "secret_text"},
-                                    {"TURN_API_TOKEN", "secret_text"}};
+    // Inheritance is explicit per binding, and strict mode rejects missing
+    // secrets instead of silently removing them during deployment.
+    metadata["bindings"].push_back(
+        Json{{"type", "inherit"}, {"name", "TURN_KEY_ID"}});
+    metadata["bindings"].push_back(
+        Json{{"type", "inherit"}, {"name", "TURN_API_TOKEN"}});
   }
   httplib::MultipartFormDataItems parts = {
     {"metadata", metadata.dump(), "", "application/json"},
     {"worker.js", worker_script, "worker.js", "application/javascript+module"}
   };
   auto client = Client(kApi);
-  auto response = client.Put(Prefix(options.account_id), Authorization(token), parts);
+  auto response = client.Put(Prefix(options.account_id) +
+      (status.worker_exists ? "?bindings_inherit=strict" : ""),
+      Authorization(token), parts);
   return Decode(response);
 }
 
