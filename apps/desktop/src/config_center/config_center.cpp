@@ -131,6 +131,22 @@ int ConfigCenter::Load() {
   }
   enable_self_hosted_ =
       ini_->GetBoolValue(section_, "enable_self_hosted", enable_self_hosted_);
+  // Existing installations predate this field. They already have a chosen
+  // effective server and must not be interrupted by a first-run wizard.
+  const char* server_selection = ini_->GetValue(section_, "server_selection_completed", nullptr);
+  if (!server_selection) {
+    server_selection_completed_ = true;
+    ini_->SetBoolValue(section_, "server_selection_completed", true);
+    persist_config_migration = true;
+  } else {
+    server_selection_completed_ =
+        ini_->GetBoolValue(section_, "server_selection_completed", false);
+  }
+  const std::string provider = ini_->GetValue(section_, "server_provider",
+      enable_self_hosted_ ? "custom" : "public");
+  server_provider_ = provider == "cloudflare" ? SERVER_PROVIDER::CLOUDFLARE
+                   : provider == "custom" ? SERVER_PROVIDER::CUSTOM
+                   : SERVER_PROVIDER::PUBLIC;
 
   const char* signal_server_host_value =
       ini_->GetValue(section_, "signal_server_host", nullptr);
@@ -248,6 +264,10 @@ int ConfigCenter::Save() {
                     turn_mode_ != TURN_MODE::DISABLED);
   ini_->SetBoolValue(section_, "enable_srtp", true);
   ini_->SetBoolValue(section_, "enable_self_hosted", enable_self_hosted_);
+  ini_->SetBoolValue(section_, "server_selection_completed", server_selection_completed_);
+  ini_->SetValue(section_, "server_provider",
+      server_provider_ == SERVER_PROVIDER::CLOUDFLARE ? "cloudflare"
+      : server_provider_ == SERVER_PROVIDER::CUSTOM ? "custom" : "public");
 
   // only save when self hosted
   if (enable_self_hosted_) {
@@ -422,6 +442,47 @@ int ConfigCenter::SetServerPort(int port) {
   if (port < 1 || port > 65535 || StoreValues({{"signal_server_port", std::to_string(port)}}) != 0) return -1;
   signal_server_port_ = port;
   return 0;
+}
+
+int ConfigCenter::SelectServer(SERVER_PROVIDER provider,
+                               const std::string& host, int port) {
+  const bool self_hosted = provider != SERVER_PROVIDER::PUBLIC;
+  if (self_hosted) {
+    if (host.empty() || port < 1 || port > 65535 ||
+        host.size() > 255 || host.find_first_of("\r\n\t @?#") != std::string::npos)
+      return -1;
+    MiniRtcSignalServerAddress address{};
+    if (MiniRtcParseSignalServerAddress(host.data(), host.size(), &address) != 0)
+      return -1;
+    if (provider == SERVER_PROVIDER::CLOUDFLARE &&
+        (port != 443 || std::string(address.target) != "/signal"))
+      return -1;
+  }
+  const std::string provider_name =
+      provider == SERVER_PROVIDER::CLOUDFLARE ? "cloudflare" :
+      provider == SERVER_PROVIDER::CUSTOM ? "custom" : "public";
+  // Persist as a single transaction before updating the in-memory view.
+  if (StoreValues({{"server_provider", provider_name},
+                   {"server_selection_completed", "true"},
+                   {"enable_self_hosted", self_hosted ? "true" : "false"},
+                   {"signal_server_host", self_hosted ? host : signal_server_host_},
+                   {"signal_server_port", std::to_string(self_hosted ? port : signal_server_port_)}}) != 0)
+    return -1;
+  server_provider_ = provider;
+  server_selection_completed_ = true;
+  enable_self_hosted_ = self_hosted;
+  if (self_hosted) {
+    signal_server_host_ = host;
+    signal_server_port_ = port;
+  }
+  return 0;
+}
+
+bool ConfigCenter::IsServerSelectionCompleted() const {
+  return server_selection_completed_;
+}
+ConfigCenter::SERVER_PROVIDER ConfigCenter::GetServerProvider() const {
+  return server_provider_;
 }
 
 int ConfigCenter::SetSelfHosted(bool enabled) {

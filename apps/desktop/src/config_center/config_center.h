@@ -48,6 +48,14 @@ class ConfigCenter {
   int SetServerPort(int signal_server_port);
   int SetServerEndpoint(const std::string& address, int port);
   int SetSelfHosted(bool enable_self_hosted);
+  // Atomic server selection. Existing identity and other settings are preserved.
+  // Public is the default upstream server, cloudflare uses the existing
+  // self-hosted WSS endpoint and custom uses the existing host/port parser.
+  enum class SERVER_PROVIDER { PUBLIC, CLOUDFLARE, CUSTOM };
+  int SelectServer(SERVER_PROVIDER provider, const std::string& host = {},
+                   int port = 0);
+  bool IsServerSelectionCompleted() const;
+  SERVER_PROVIDER GetServerProvider() const;
   int SetAutostart(bool enable_autostart);
   int SetDaemon(bool enable_daemon);
   int SetPrivacyScreen(bool enable_privacy_screen);
@@ -111,6 +119,8 @@ class ConfigCenter {
   int signal_server_port_ = 0;
   int server_port_default_ = 9099;
   bool enable_self_hosted_ = false;
+  bool server_selection_completed_ = false;
+  SERVER_PROVIDER server_provider_ = SERVER_PROVIDER::PUBLIC;
   bool enable_autostart_ = false;
   bool enable_daemon_ = false;
   std::atomic<bool> enable_privacy_screen_{true};
