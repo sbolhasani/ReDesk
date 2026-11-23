@@ -18,6 +18,16 @@ int main() {
   using crossdesk::cloudflare::SetupOptions;
   using crossdesk::cloudflare::ExistingAction;
   const auto& service = CloudflareProvisioningService{};
+  const std::string account = "0123456789abcdef0123456789abcdef";
+  Require(CloudflareProvisioningService::TokenVerifyPath(
+      "cfat_sample", account) ==
+      "/client/v4/accounts/" + account + "/tokens/verify",
+      "account-owned token uses account-scoped verification");
+  Require(CloudflareProvisioningService::TokenVerifyPath("cfat_sample").empty(),
+      "account-owned tokens require an Account ID");
+  Require(CloudflareProvisioningService::TokenVerifyPath("cfut_sample", account) ==
+      "/client/v4/user/tokens/verify",
+      "user token uses user-scoped verification");
   std::string base, signal;
 
   Require(CloudflareProvisioningService::NormalizeWorkerUrl(
