@@ -813,6 +813,8 @@ export component MainWindow inherits Window {
     in property <string> server-setup-review-description: "";
     in property <string> server-setup-review-url: "";
     in property <bool> server-setup-review-existing: false;
+    in property <bool> server-setup-review-do-binding: false;
+    in property <bool> server-setup-review-turn-configured: false;
     in property <bool> server-setup-review-can-use: false;
     in property <bool> server-setup-review-can-update: false;
     in property <bool> server-setup-review-turn-key: false;
@@ -4077,14 +4079,15 @@ export component MainWindow inherits Window {
                 }
                 Text {
                     text: root.server-setup-review-existing
-                        ? (root.server-setup-review-can-update ? "Durable Object: Verified" : "Durable Object: Inspect before updating")
+                        ? (root.server-setup-review-do-binding ? "Durable Object: Verified" : "Durable Object: Not verified")
                         : "Durable Object: Will be created during installation";
                     color: WorkbenchStyle.text; font-size: 12px; wrap: word-wrap;
                 }
                 Text {
-                    text: root.server-setup-review-turn-key
-                        ? "TURN: Existing key found" : root.server-setup-review-turn-checked
-                        ? "TURN: Not configured" : "TURN: Verification unavailable";
+                    text: root.server-setup-review-turn-configured ? "TURN: Configured and healthy"
+                        : root.server-setup-review-turn-key ? "TURN: Existing key found (not yet verified)"
+                        : root.server-setup-review-turn-checked ? "TURN: Not configured"
+                        : "TURN: Verification unavailable";
                     color: WorkbenchStyle.text; font-size: 12px;
                 }
                 Text {
