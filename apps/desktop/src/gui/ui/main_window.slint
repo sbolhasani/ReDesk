@@ -4306,7 +4306,7 @@ export component MainWindow inherits Window {
                     if root.server-setup-provider == 1: VerticalLayout {
                         width: parent.width;
                         height: root.server-setup-cloudflare-method == 1
-                            ? 145px + (root.server-setup-need-account ? 62px : 0px)
+                            ? 149px + (root.server-setup-need-account ? 62px : 0px)
                                       + (root.server-setup-need-worker-url ? 62px : 0px)
                             : 152px;
                         vertical-stretch: 0; spacing: 8px;
@@ -4342,9 +4342,10 @@ export component MainWindow inherits Window {
                                 text: "ReDesk will verify /health before saving the WSS /signal endpoint.";
                                 wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 11px;
                             }
-                        }                        if root.server-setup-cloudflare-method == 1: VerticalLayout {
+                        }
+                        if root.server-setup-cloudflare-method == 1: VerticalLayout {
                             width: parent.width;
-                            height: 104px + (root.server-setup-need-account ? 62px : 0px)
+                            height: 108px + (root.server-setup-need-account ? 62px : 0px)
                                           + (root.server-setup-need-worker-url ? 62px : 0px);
                             vertical-stretch: 0; spacing: 7px;
                             HorizontalLayout {
@@ -4429,7 +4430,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                        }}
+                        }
                     }
                 }
             }
