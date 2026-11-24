@@ -605,9 +605,8 @@ Result CloudflareProvisioningService::Deploy(
     })}
   };
   if (!status.worker_exists) {
-    metadata["migrations"] = Json::array({
-      Json{{"new_tag", "v1"}, {"new_sqlite_classes", Json::array({"SignalHub"})}}
-    });
+    metadata["migrations"] =
+        Json{{"new_tag", "v1"}, {"new_sqlite_classes", Json::array({"SignalHub"})}};
   } else {
     // Inherit only existing secret bindings; strict mode prevents
     // concurrent deletion from silently dropping a credential.
