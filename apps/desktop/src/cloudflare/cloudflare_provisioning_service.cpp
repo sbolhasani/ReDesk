@@ -463,10 +463,15 @@ BackendDiscovery CloudflareProvisioningService::DiscoverBackend(
       discovery.suggested_worker_url =
           "https://redesk-signal.redesk-" + requested_account.substr(0, 12) +
           ".workers.dev";
-      discovery.message =
-          "Suggested Worker URL is filled in. You can edit it, then select "
-          "Fetch again to review the installation. The subdomain will be "
-          "requested only after you confirm Install.";
+      // Review the generated candidate immediately. A second Fetch must
+      // not be necessary merely to accept the proposed URL.
+      discovery.review = ReviewAccount(token, requested_account,
+                                       discovery.suggested_worker_url);
+      discovery.review_ready = discovery.review.ok;
+      discovery.message = discovery.review_ready
+          ? discovery.review.explanation
+          : "A Worker URL has been suggested. You may edit it and retry: " +
+                discovery.review.explanation;
       return discovery;
     } else {
       auto resolved = Decode(response, &subdomain);
