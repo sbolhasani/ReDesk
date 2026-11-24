@@ -458,11 +458,15 @@ BackendDiscovery CloudflareProvisioningService::DiscoverBackend(
       // A documented account initialization state. The candidate is created
       // only after explicit Install confirmation, not during Fetch.
       discovery.needs_worker_url = true;
+      // Deterministic, account-specific candidate. It is not reserved or
+      // guaranteed available until Cloudflare accepts it during Install.
+      discovery.suggested_worker_url =
+          "https://redesk-signal.redesk-" + requested_account.substr(0, 12) +
+          ".workers.dev";
       discovery.message =
-          "This Cloudflare account has no workers.dev subdomain. "
-          "Enter your preferred new Worker URL in the format "
-          "https://redesk-signal.YOUR-SUBDOMAIN.workers.dev. "
-          "ReDesk will request that account subdomain only after you confirm Install.";
+          "Suggested Worker URL is filled in. You can edit it, then select "
+          "Fetch again to review the installation. The subdomain will be "
+          "requested only after you confirm Install.";
       return discovery;
     } else {
       auto resolved = Decode(response, &subdomain);
