@@ -1463,8 +1463,6 @@ void GuiApplication::InitializeUi() {
 #if _WIN32
   ui_->session_end.Start();
 #endif
-  ui_->sponsorship_prompt_pending =
-      config_center_->GetSponsorshipPromptDismissedVersion() != CROSSDESK_VERSION;
   ui_->video_presenter =
       std::make_unique<SlintVideoPresenter>(*video_renderer_);
 #if _WIN32
@@ -3359,16 +3357,6 @@ void GuiApplication::Tick() {
   SyncGallery();
   SyncConnectionDialog();
   SyncPlatformDialogs();
-  // Wait for startup notices and user interactions to finish. Once shown,
-  // never reopen it during this run, even if saving the dismissal fails.
-  if (ui_->sponsorship_prompt_pending &&
-      ui_->main->window().is_visible() &&
-      !ui_->main->window().is_minimized() &&
-      ui_->main->get_can_show_sponsorship() &&
-      !ui_->file_dialog_open && !HasActiveSession()) {
-    ui_->sponsorship_prompt_pending = false;
-    ui_->main->set_sponsorship_open(true);
-  }
   SyncStreamWindow();
   SyncServerWindow();
   SyncTrustedDevices();
