@@ -17,6 +17,7 @@ struct BackendStatus {
   bool redesk_health = false;
   bool durable_object_binding = false;
   bool turn_configured = false;
+  std::string worker_version; // empty means legacy/unknown, not "0.0.0"
   bool turn_key_id_binding = false;
   bool turn_api_token_binding = false;
   bool unexpected_bindings = false;
@@ -33,6 +34,7 @@ struct BackendReview {
   bool durable_object_binding = false;
   bool redesk_health = false;
   bool turn_configured = false;
+  std::string worker_version;
   bool existing_turn_key = false;
   bool turn_keys_checked = false;
   bool update_safe = false;
@@ -94,6 +96,9 @@ class CloudflareProvisioningService {
                                    const std::string& account_id = {},
                                    const std::string& worker_url = {}) const;
   static bool MayUpdateWorker(const BackendStatus& status);
+  // Strict semantic version comparison; legacy workers report no version.
+  // They may be manually updated only if Worker bindings were verified.
+  static bool IsUpdateAvailable(const std::string& deployed_version);
   Result ConfigureExisting(const SetupOptions& options,
                            std::string* signal_address) const;
   // Fresh deployment only. Existing Worker/TURN state always requires a
