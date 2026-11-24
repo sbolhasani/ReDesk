@@ -801,6 +801,11 @@ export component MainWindow inherits Window {
     in-out property <bool> server-setup-need-account: false;
     in-out property <bool> server-setup-need-worker-url: false;
     in-out property <bool> server-setup-token-verified: false;
+    in-out property <bool> server-setup-cloudflare-configured: false;
+    in-out property <bool> server-setup-postconnect: false;
+    in-out property <string> server-setup-deployed-version: "Unknown";
+    in-out property <string> server-setup-bundled-version: "1.0.0";
+    callback server-setup-manage-worker();
     in-out property <bool> server-setup-review-open: false;
     in property <string> server-setup-review-description: "";
     in property <string> server-setup-review-url: "";
@@ -3022,13 +3027,22 @@ export component MainWindow inherits Window {
                             SettingsRow {
                                 label: "Server Configuration";
                                 SettingsButton {
-                                    x: parent.width - 156px; y: 4px; width: 144px;
+                                    x: parent.width - 148px; y: 4px; width: 136px;
                                     text: "Change Server";
                                     enabled: !root.settings-session-active;
                                     clicked => {
                                         root.settings-open = false;
+                                        root.server-setup-postconnect = false;
                                         root.server-setup-open = true;
                                         root.server-setup-page = 0;
+                                    }
+                                }
+                                if root.server-setup-cloudflare-configured: SettingsButton {
+                                    x: parent.width - 296px; y: 4px; width: 140px;
+                                    text: "Worker Updates";
+                                    clicked => {
+                                        root.settings-open = false;
+                                        root.server-setup-manage-worker();
                                     }
                                 }
                             }
@@ -4007,6 +4021,12 @@ export component MainWindow inherits Window {
                 text: "Select where ReDesk connects for signaling. Existing device identity is preserved.";
                 font-size: 12px; wrap: word-wrap; color: WorkbenchStyle.muted;
             }
+            if root.server-setup-postconnect && !root.server-setup-review-open: Text {
+                x: 22px; y: 98px; width: parent.width - 44px; height: 22px;
+                text: "Installed Worker: " + root.server-setup-deployed-version
+                    + "    Bundled: " + root.server-setup-bundled-version;
+                color: WorkbenchStyle.muted; font-size: 11px;
+            }
             if root.server-setup-review-open: ScrollView {
                 x: 22px; y: 107px; width: parent.width - 44px;
                 height: max(90px, parent.height -
@@ -4023,6 +4043,11 @@ export component MainWindow inherits Window {
                 Text {
                     text: root.server-setup-review-url;
                     wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 12px;
+                }
+                Text {
+                    text: "Deployed Worker: " + root.server-setup-deployed-version
+                        + "    Bundled: " + root.server-setup-bundled-version;
+                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 12px;
                 }
                 Text {
                     text: root.server-setup-review-description;
@@ -4081,6 +4106,7 @@ export component MainWindow inherits Window {
                 x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
                 SettingsButton {
                     width: parent.width; height: 64px; align-left: true;
+                    primary: root.server-setup-provider == 1;
                     text: "Cloudflare - your own signaling backend";
                     clicked => {
                         root.server-setup-provider = 1;
@@ -4093,11 +4119,13 @@ export component MainWindow inherits Window {
                 }
                 SettingsButton {
                     width: parent.width; height: 64px; align-left: true;
+                    primary: root.server-setup-provider == 0;
                     text: "CrossDesk Public Server - no setup";
                     clicked => { root.server-setup-provider = 0; root.server-setup-page = 1; root.server-setup-error = ""; }
                 }
                 SettingsButton {
                     width: parent.width; height: 64px; align-left: true;
+                    primary: root.server-setup-provider == 2;
                     text: "Custom Server - compatible self-hosted server";
                     clicked => { root.server-setup-provider = 2; root.server-setup-page = 1; root.server-setup-error = ""; }
                 }
@@ -4105,9 +4133,10 @@ export component MainWindow inherits Window {
             // Keep fields in a measured, scrollable layout. The dedicated
             // feedback area below is never laid over a form input.
             if root.server-setup-page == 1 && !root.server-setup-review-open: ScrollView {
-                x: 22px; y: 110px; width: parent.width - 44px;
+                x: 22px; y: root.server-setup-postconnect ? 130px : 110px; width: parent.width - 44px;
                 height: max(90px, parent.height -
-                    (root.server-setup-error != "" || root.server-setup-status != "" ? 269px : 189px));
+                    (root.server-setup-error != "" || root.server-setup-status != "" ? 289px : 209px)
+                    - (root.server-setup-postconnect ? 20px : 0px));
                 viewport-width: self.visible-width;
                 horizontal-scrollbar-policy: always-off;
                 viewport-height: server-configuration-content.preferred-height;
