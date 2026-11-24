@@ -1023,6 +1023,7 @@ struct GuiApplication::SlintUi {
     bool health_retry = false;
     bool worker_version_probe = false;
     std::string discovered_account_id;
+    std::string suggested_worker_url;
     // Used only for discarding stale read-only fetch responses when the user
     // edits the token while a request is in progress; not logged or persisted.
     std::string requested_token;
@@ -2276,6 +2277,7 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       result.needs_account_id = discovery.needs_account_id;
       result.needs_worker_url = discovery.needs_worker_url;
       result.discovered_account_id = std::move(discovery.account_id);
+      result.suggested_worker_url = std::move(discovery.suggested_worker_url);
       result.message = std::move(discovery.message);
       result.review = std::move(discovery.review);
       return result;
@@ -3016,6 +3018,10 @@ void GuiApplication::Tick() {
                                                !result.discovered_account_id.empty());
       if (!result.discovered_account_id.empty())
         window->set_server_setup_account(result.discovered_account_id.c_str());
+      // Never replace a URL the user has already entered while Fetch ran.
+      if (!result.suggested_worker_url.empty() &&
+          std::string(window->get_server_setup_host()).empty())
+        window->set_server_setup_host(result.suggested_worker_url.c_str());
       if (result.review_ready) {
         ui_->server_setup_pending_token =
             std::string(window->get_server_setup_token());
@@ -3041,7 +3047,13 @@ void GuiApplication::Tick() {
       } else {
         ui_->server_setup_pending_token.clear();
         ui_->server_setup_review = {};
-        window->set_server_setup_error(result.message.c_str());
+        if (!result.suggested_worker_url.empty()) {
+          // First-time setup is expected, not an error.
+          window->set_server_setup_error("");
+          window->set_server_setup_status(result.message.c_str());
+        } else {
+          window->set_server_setup_error(result.message.c_str());
+        }
       }
     } else if (result.token_validation) {
       window->set_server_setup_error(result.ok ? "" : result.message.c_str());
