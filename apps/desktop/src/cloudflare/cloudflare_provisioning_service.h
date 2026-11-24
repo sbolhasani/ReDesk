@@ -54,6 +54,8 @@ struct BackendDiscovery {
   bool needs_worker_url = false;
   bool review_ready = false;
   std::string account_id;
+  // A proposed URL only; Cloudflare does not reserve the subdomain until Install.
+  std::string suggested_worker_url;
   std::string message;
   BackendReview review;
 };
