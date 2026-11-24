@@ -2184,15 +2184,20 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       return;
     }
     if (action != 1 && action != 2) return;
-    if (action == 1 && (review.worker_exists || review.existing_turn_key)) {
-      main->set_server_setup_error("Fresh install blocked by existing Cloudflare infrastructure.");
+    if (action == 1 &&
+        !(review.pending_turn_recovery ||
+          (!review.worker_exists && review.turn_keys_checked &&
+           !review.existing_turn_key))) {
+      main->set_server_setup_error(
+          "Install requires verified Worker absence and TURN key access, "
+          "or a matching locally recoverable pending TURN key.");
       return;
     }
     if (action == 2 && (!review.worker_exists || !review.update_safe)) {
       main->set_server_setup_error("Worker update blocked by compatibility or version checks.");
       return;
     }
-    if (action == 2 && HasActiveSession()) {
+    if ((action == 1 || action == 2) && HasActiveSession()) {
       main->set_server_setup_error(
           "Disconnect active remote sessions before updating the Worker.");
       return;
@@ -2982,6 +2987,10 @@ void GuiApplication::Tick() {
         window->set_server_setup_review_existing(result.review.worker_exists);
         window->set_server_setup_review_can_use(result.review.redesk_health);
         window->set_server_setup_review_can_update(result.review.update_safe);
+        window->set_server_setup_review_can_install(
+            !result.review.worker_exists &&
+            result.review.turn_keys_checked && !result.review.existing_turn_key);
+        window->set_server_setup_review_can_resume(result.review.pending_turn_recovery);
         window->set_server_setup_confirm_update(false);
         window->set_server_setup_error("");
         window->set_server_setup_status(result.review.redesk_health
@@ -3022,6 +3031,11 @@ void GuiApplication::Tick() {
             result.review.worker_exists && result.review.redesk_health);
         window->set_server_setup_review_can_update(result.review.update_safe);
         window->set_server_setup_review_turn_key(result.review.existing_turn_key);
+        window->set_server_setup_review_turn_checked(result.review.turn_keys_checked);
+        window->set_server_setup_review_can_install(
+            !result.review.worker_exists &&
+            result.review.turn_keys_checked && !result.review.existing_turn_key);
+        window->set_server_setup_review_can_resume(result.review.pending_turn_recovery);
         window->set_server_setup_confirm_update(false);
         window->set_server_setup_error("");
       } else {
@@ -3045,6 +3059,11 @@ void GuiApplication::Tick() {
           result.review.worker_exists && result.review.redesk_health);
       window->set_server_setup_review_can_update(result.review.update_safe);
       window->set_server_setup_review_turn_key(result.review.existing_turn_key);
+      window->set_server_setup_review_turn_checked(result.review.turn_keys_checked);
+      window->set_server_setup_review_can_install(
+          !result.review.worker_exists &&
+          result.review.turn_keys_checked && !result.review.existing_turn_key);
+      window->set_server_setup_review_can_resume(result.review.pending_turn_recovery);
       window->set_server_setup_confirm_update(false);
       window->set_server_setup_error("");
     } else if (!result.ok) {
