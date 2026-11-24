@@ -2,6 +2,7 @@
 // This embeds the full production signaling Worker, not a simplified prototype.
 #pragma once
 namespace crossdesk::cloudflare {
+inline constexpr char kReDeskWorkerVersion[] = "1.0.0";
 inline constexpr char kReDeskSignalingWorker[] = R"REDESKWORKER(/*
  * ReDesk Cloudflare Worker signaling prototype.
  *
@@ -11,6 +12,9 @@ inline constexpr char kReDeskSignalingWorker[] = R"REDESKWORKER(/*
  * service and per-connection credentials. Do not expose privileged endpoints.
  */
 
+// ReDesk semantic version, separate from Cloudflare's deployment/version ID.
+// Bump only for compatible code releases and keep the desktop bundle in sync.
+const REDESK_WORKER_VERSION = "1.0.0";
 const MAX_MESSAGE = 64 * 1024;
 const CHALLENGE_MS = 30_000;
 const SIGNATURE_CHALLENGE_MS = 10_000; // CrossDesk single-use proof deadline.
@@ -92,6 +96,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
       return Response.json({ok:true, service:"ReDesk signaling",
+        version:REDESK_WORKER_VERSION,
         protocol:"crossdesk-minirtc-v1", media_relay:false,
         turn_configured:Boolean(env.TURN_KEY_ID && env.TURN_API_TOKEN)});
     }
