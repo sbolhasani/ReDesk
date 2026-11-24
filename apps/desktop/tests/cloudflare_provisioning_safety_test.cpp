@@ -119,6 +119,35 @@ int main() {
   Require(!failed_again.update_safe && !failed_again.redesk_health,
           "subsequent failed health check disables both actions again");
   
+  // ReDesk semantic Worker version is not Cloudflare's deployment ID.
+  Require(CloudflareProvisioningService::IsUpdateAvailable(""),
+          "unversioned legacy Worker can be updated only with binding checks");
+  Require(CloudflareProvisioningService::IsUpdateAvailable("0.9.9"),
+          "older Worker version permits update");
+  Require(!CloudflareProvisioningService::IsUpdateAvailable("1.0.0"),
+          "same Worker version must not be overwritten");
+  Require(!CloudflareProvisioningService::IsUpdateAvailable("1.0.1"),
+          "newer patch version must not be downgraded");
+  Require(!CloudflareProvisioningService::IsUpdateAvailable("2.0.0"),
+          "newer major version must not be downgraded");
+  Require(!CloudflareProvisioningService::IsUpdateAvailable("not-semver"),
+          "malformed version must not authorize update");
+  crossdesk::cloudflare::BackendReview versioned;
+  versioned.worker_exists = true;
+  versioned.worker_bindings_verified = true;
+  crossdesk::cloudflare::BackendStatus current_health;
+  current_health.redesk_health = true;
+  current_health.worker_version = "1.0.0";
+  auto current = CloudflareProvisioningService::WithHealthStatus(
+      versioned, current_health);
+  Require(current.redesk_health && !current.update_safe,
+          "healthy current version must not offer an update");
+  current_health.worker_version = "0.9.0";
+  auto old = CloudflareProvisioningService::WithHealthStatus(
+      versioned, current_health);
+  Require(old.update_safe && old.worker_version == "0.9.0",
+          "outdated Worker with verified bindings should offer an update");
+
   std::cout << "Cloudflare safety tests passed." << std::endl;
   return 0;
 }
