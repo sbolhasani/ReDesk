@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
 #include <string>
 #if defined(_WIN32)
 #define NOMINMAX
@@ -75,7 +76,7 @@ bool SavePendingKey(const std::string& account, const std::string& uid,
                     const std::string& secret) {
   const auto path = RecoveryFile(account);
   if (path.empty()) return false;
-  const std::string plain = uid + "\\n" + secret;
+  const std::string plain = uid + "\n" + secret;
   DATA_BLOB input{static_cast<DWORD>(plain.size()),
                   reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()))};
   DATA_BLOB encrypted{};
@@ -113,7 +114,7 @@ bool LoadPendingKey(const std::string& account,
                              CRYPTPROTECT_UI_FORBIDDEN, &decrypted)) {
         std::string plain(reinterpret_cast<char*>(decrypted.pbData),
                           decrypted.cbData);
-        auto sep = plain.find('\\n');
+        auto sep = plain.find('\n');
         if (sep != std::string::npos) {
           *uid = plain.substr(0, sep);
           *secret = plain.substr(sep + 1);
@@ -536,7 +537,10 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
       }
     }
   }
-  review.pending_turn_recovery = HasPendingTurnRecovery(account);
+  review.pending_turn_recovery =
+      HasPendingTurnRecovery(account) &&
+      (!review.worker_exists ||
+       (review.worker_bindings_verified && review.redesk_health));
   review.ok = true;
   if (review.redesk_health) {
     review.explanation = review.update_safe
