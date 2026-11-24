@@ -68,7 +68,7 @@ bool IsHex32(const std::string& value) {
 std::string RecoveryFile(const std::string& account) {
   const char* local = std::getenv("LOCALAPPDATA");
   if (!local || !*local) return {};
-  return std::string(local) + "\\\\ReDesk\\\\cloudflare-turn-" + account + ".bin";
+  return std::string(local) + "\\ReDesk\\cloudflare-turn-" + account + ".bin";
 }
 bool SavePendingKey(const std::string& account, const std::string& uid,
                     const std::string& secret) {
@@ -80,7 +80,7 @@ bool SavePendingKey(const std::string& account, const std::string& uid,
   DATA_BLOB encrypted{};
   if (!CryptProtectData(&input, L"ReDesk TURN recovery", nullptr, nullptr, nullptr,
                         CRYPTPROTECT_UI_FORBIDDEN, &encrypted)) return false;
-  const auto root = path.substr(0, path.find_last_of("\\\\"));
+  const auto root = path.substr(0, path.find_last_of("\\"));
   CreateDirectoryA(root.c_str(), nullptr);
   HANDLE file = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr,
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
