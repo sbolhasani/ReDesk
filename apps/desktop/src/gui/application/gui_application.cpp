@@ -1651,6 +1651,11 @@ void GuiApplication::ResetSettingsUi(bool gallery_window) {
     return;
   }
   auto& main = ui_->Window(gallery_window);
+  const auto configured_provider = config_center_->GetServerProvider();
+  main->set_server_setup_cloudflare_configured(
+      configured_provider == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE);
+  main->set_server_setup_provider(static_cast<int32_t>(configured_provider));
+  main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
   main->set_language_index(language_button_value_);
   main->set_codec_index(video_encode_format_button_value_);
   main->set_ip_direct_enabled_draft(config_center_->IsIpDirectEnabled());
