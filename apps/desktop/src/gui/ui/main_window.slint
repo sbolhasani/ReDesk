@@ -4317,7 +4317,7 @@ export component MainWindow inherits Window {
                     if root.server-setup-provider == 1: VerticalLayout {
                         width: parent.width;
                         height: root.server-setup-cloudflare-method == 1
-                            ? 211px + (root.server-setup-need-worker-url ? 62px : 0px)
+                            ? 204px + (root.server-setup-need-worker-url ? 62px : 0px)
                             : 152px;
                         vertical-stretch: 0; spacing: 8px;
                         HorizontalLayout {
@@ -4355,8 +4355,8 @@ export component MainWindow inherits Window {
                         }
                         if root.server-setup-cloudflare-method == 1: VerticalLayout {
                             width: parent.width;
-                            height: 170px + (root.server-setup-need-worker-url ? 62px : 0px);
-                            vertical-stretch: 0; spacing: 7px;
+                            height: 164px + (root.server-setup-need-worker-url ? 62px : 0px);
+                            vertical-stretch: 0; spacing: 5px;
                             HorizontalLayout {
                                 width: parent.width; height: 24px; vertical-stretch: 0;
                                 spacing: 10px;
