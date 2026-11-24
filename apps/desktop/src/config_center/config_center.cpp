@@ -173,7 +173,7 @@ int ConfigCenter::Load() {
   privacy_local_unlock_allowed_.store(
       ini_->GetBoolValue(section_, "privacy_local_unlock_allowed", true));
   lock_on_disconnect_.store(
-      ini_->GetBoolValue(section_, "lock_on_disconnect", true));
+      ini_->GetBoolValue(section_, "lock_on_disconnect", false));
   trusted_devices_only_.store(
       ini_->GetValue(section_, "trusted_devices_only", nullptr) != nullptr &&
       ini_->GetBoolValue(section_, "trusted_devices_only", true));
@@ -334,7 +334,7 @@ int ConfigCenter::ApplySharedHostConfig(const std::string& contents) {
   const long turn = host.GetLongValue(section_, "turn_mode", static_cast<long>(turn_mode_));
   const long codec = host.GetLongValue(section_, "video_encode_format", static_cast<long>(video_encode_format_));
   const bool trusted = host.GetBoolValue(section_, "trusted_devices_only", false);
-  const bool lock = host.GetBoolValue(section_, "lock_on_disconnect", true);
+  const bool lock = host.GetBoolValue(section_, "lock_on_disconnect", false);
   MiniRtcSignalServerAddress address{};
   if (!IsValidTurnModeValue(turn) || codec < 0 || codec > 1 ||
       (self_hosted && (port < 1 || port > 65535 ||
