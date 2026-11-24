@@ -1,4 +1,5 @@
 #include "cloudflare_provisioning_service.h"
+#include "bundled_worker.h"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -165,6 +166,13 @@ BackendStatus CloudflareProvisioningService::CheckHealth(
     status.redesk_health = body.value("ok", false) &&
                            body.value("service", "") == "ReDesk signaling";
     status.turn_configured = body.value("turn_configured", false);
+    if (body.contains("version") && body["version"].is_string()) {
+      const auto parsed = body["version"].get<std::string>();
+      if (parsed.size() <= 32 &&
+          std::all_of(parsed.begin(), parsed.end(), [](unsigned char ch) {
+            return std::isdigit(ch) || ch == '.';
+          })) status.worker_version = parsed;
+    }
     status.diagnostic = status.redesk_health
         ? "Worker health OK (does not validate remote desktop connectivity)"
         : "The endpoint is not a compatible ReDesk Worker";
@@ -245,6 +253,39 @@ BackendStatus CloudflareProvisioningService::Inspect(
   return status;
 }
 
+bool CloudflareProvisioningService::IsUpdateAvailable(
+    const std::string& deployed_version) {
+  // An old Worker without a version may be updated only when the account
+  // binding checks have already proven its identity.
+  if (deployed_version.empty()) return true;
+  auto parse = [](const std::string& value, int out[3]) {
+    std::size_t pos = 0;
+    for (int i = 0; i < 3; ++i) {
+      auto end = value.find('.', pos);
+      if ((i < 2 && end == std::string::npos) ||
+          (i == 2 && end != std::string::npos)) return false;
+      auto component = value.substr(pos, end == std::string::npos
+                                          ? end : end - pos);
+      if (component.empty() || component.size() > 8 ||
+          !std::all_of(component.begin(), component.end(),
+              [](unsigned char ch) { return std::isdigit(ch); }))
+        return false;
+      try { out[i] = std::stoi(component); }
+      catch (...) { return false; }
+      pos = end + 1;
+    }
+    return true;
+  };
+  int deployed[3]{}, current[3]{};
+  if (!parse(deployed_version, deployed) ||
+      !parse(kReDeskWorkerVersion, current)) return false;
+  for (int i = 0; i < 3; ++i) {
+    if (deployed[i] < current[i]) return true;
+    if (deployed[i] > current[i]) return false;
+  }
+  return false;
+}
+
 bool CloudflareProvisioningService::MayUpdateWorker(
     const BackendStatus& status) {
   return status.worker_exists && status.durable_object_binding &&
@@ -256,8 +297,10 @@ BackendReview CloudflareProvisioningService::WithHealthStatus(
   auto updated = previous;
   updated.redesk_health = health.redesk_health;
   updated.turn_configured = health.turn_configured;
+  updated.worker_version = health.worker_version;
   updated.worker_exists = previous.worker_exists || health.redesk_health;
-  updated.update_safe = health.redesk_health && previous.worker_bindings_verified;
+  updated.update_safe = health.redesk_health && previous.worker_bindings_verified &&
+                        IsUpdateAvailable(health.worker_version);
   return updated;
 }
 
@@ -273,6 +316,10 @@ BackendReview CloudflareProvisioningService::RetryHealth(
           "code update is also permitted after explicit confirmation."
         : "ReDesk /health is healthy. Use Existing Backend is available. "
           "Code update remains disabled because Worker bindings could not be verified.";
+    if (!refreshed.worker_version.empty())
+      refreshed.explanation += " Deployed version: " + refreshed.worker_version + ".";
+    if (!IsUpdateAvailable(refreshed.worker_version))
+      refreshed.explanation += " No newer bundled version is available.";
   } else {
     refreshed.explanation =
         "ReDesk /health is still unavailable or incompatible. "
@@ -417,6 +464,11 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
     review.explanation = review.update_safe
         ? "ReDesk Worker is healthy. You can use it or explicitly update the code without resetting Durable Object data."
         : "ReDesk Worker is healthy. You can use it now. Worker update is unavailable because account-level bindings could not be verified.";
+    if (review.worker_version.empty())
+      review.explanation += " Worker version unavailable (legacy deployment).";
+    else review.explanation += " Deployed version: " + review.worker_version + ".";
+    if (!IsUpdateAvailable(review.worker_version))
+      review.explanation += " The deployed version is already current or newer.";
     if (!review.turn_keys_checked)
       review.explanation += " TURN key listing is restricted; existing TURN configuration was not changed.";
   } else if (worker.worker_exists) {
