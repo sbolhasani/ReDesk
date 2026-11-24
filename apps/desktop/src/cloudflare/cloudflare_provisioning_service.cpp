@@ -638,6 +638,11 @@ Result CloudflareProvisioningService::ProvisionNew(
     Progress progress) const {
   if (!IsHex32(account) || token.empty() || script.empty())
     return {false, "Provide a valid token, Account ID and bundled Worker"};
+#if !defined(_WIN32)
+  // Fail before ANY Cloudflare mutation until the platform has durable,
+  // user-scoped recovery for the one-time TURN bearer secret.
+  return {false, "Fresh Cloudflare deployment currently requires Windows DPAPI TURN recovery."};
+#endif
   if (progress) progress("Validating Cloudflare Account", "Running");
   auto validity = ValidateToken(token, account);
   if (!validity.ok) return validity;
