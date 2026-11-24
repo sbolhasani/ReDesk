@@ -4102,32 +4102,135 @@ export component MainWindow inherits Window {
                 }
                 }
             }
+            // Single-choice server picker. The three options are selectable
+            // rows, not action buttons; Continue opens the selected provider.
             if root.server-setup-page == 0 && !root.server-setup-review-open: VerticalLayout {
                 x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
-                SettingsButton {
-                    width: parent.width; height: 64px; align-left: true;
-                    primary: root.server-setup-provider == 1;
-                    text: "Cloudflare - your own signaling backend";
-                    clicked => {
-                        root.server-setup-provider = 1;
-                        root.server-setup-cloudflare-method = 1;
-                        root.server-setup-need-account = false;
-                        root.server-setup-need-worker-url = false;
-                        root.server-setup-page = 1;
-                        root.server-setup-error = "";
+                Rectangle {
+                    width: parent.width; height: 72px; border-radius: UiRadius.control;
+                    background: root.server-setup-provider == 1 ? #eaf2ff : white;
+                    border-width: root.server-setup-provider == 1 ? 2px : 1px;
+                    border-color: root.server-setup-provider == 1 ? #3275dc : UiSurface.edge;
+                    Text {
+                        x: 18px; y: 12px; width: 32px; height: 48px;
+                        text: FontAwesomeIcons.cloud; font-family: "Font Awesome 6 Free";
+                        font-weight: 900; font-size: 25px;
+                        color: root.server-setup-provider == 1 ? #2866c9 : #52657f;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 12px; width: parent.width - 118px; height: 24px;
+                        text: "Cloudflare"; font-size: 15px; font-weight: 600;
+                        color: WorkbenchStyle.text; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 38px; width: parent.width - 118px; height: 20px;
+                        text: "Your own Cloudflare signaling backend";
+                        font-size: 11px; color: WorkbenchStyle.muted;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 39px; y: 26px; width: 20px; height: 20px;
+                        border-radius: 10px; border-width: 2px;
+                        border-color: root.server-setup-provider == 1 ? #3275dc : #a5b4c9;
+                        background: root.server-setup-provider == 1 ? #3275dc : white;
+                        if root.server-setup-provider == 1: Rectangle {
+                            x: 6px; y: 6px; width: 8px; height: 8px;
+                            border-radius: 4px; background: white;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.server-setup-provider = 1;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                        }
                     }
                 }
-                SettingsButton {
-                    width: parent.width; height: 64px; align-left: true;
-                    primary: root.server-setup-provider == 0;
-                    text: "CrossDesk Public Server - no setup";
-                    clicked => { root.server-setup-provider = 0; root.server-setup-page = 1; root.server-setup-error = ""; }
+                Rectangle {
+                    width: parent.width; height: 72px; border-radius: UiRadius.control;
+                    background: root.server-setup-provider == 0 ? #eaf2ff : white;
+                    border-width: root.server-setup-provider == 0 ? 2px : 1px;
+                    border-color: root.server-setup-provider == 0 ? #3275dc : UiSurface.edge;
+                    Text {
+                        x: 18px; y: 12px; width: 32px; height: 48px;
+                        text: FontAwesomeIcons.globe; font-family: "Font Awesome 6 Free";
+                        font-weight: 900; font-size: 25px;
+                        color: root.server-setup-provider == 0 ? #2866c9 : #52657f;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 12px; width: parent.width - 118px; height: 24px;
+                        text: "CrossDesk Public Server"; font-size: 15px; font-weight: 600;
+                        color: WorkbenchStyle.text; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 38px; width: parent.width - 118px; height: 20px;
+                        text: "Shared signaling server, no setup required";
+                        font-size: 11px; color: WorkbenchStyle.muted;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 39px; y: 26px; width: 20px; height: 20px;
+                        border-radius: 10px; border-width: 2px;
+                        border-color: root.server-setup-provider == 0 ? #3275dc : #a5b4c9;
+                        background: root.server-setup-provider == 0 ? #3275dc : white;
+                        if root.server-setup-provider == 0: Rectangle {
+                            x: 6px; y: 6px; width: 8px; height: 8px;
+                            border-radius: 4px; background: white;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.server-setup-provider = 0;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                        }
+                    }
                 }
-                SettingsButton {
-                    width: parent.width; height: 64px; align-left: true;
-                    primary: root.server-setup-provider == 2;
-                    text: "Custom Server - compatible self-hosted server";
-                    clicked => { root.server-setup-provider = 2; root.server-setup-page = 1; root.server-setup-error = ""; }
+                Rectangle {
+                    width: parent.width; height: 72px; border-radius: UiRadius.control;
+                    background: root.server-setup-provider == 2 ? #eaf2ff : white;
+                    border-width: root.server-setup-provider == 2 ? 2px : 1px;
+                    border-color: root.server-setup-provider == 2 ? #3275dc : UiSurface.edge;
+                    Text {
+                        x: 18px; y: 12px; width: 32px; height: 48px;
+                        text: FontAwesomeIcons.server; font-family: "Font Awesome 6 Free";
+                        font-weight: 900; font-size: 25px;
+                        color: root.server-setup-provider == 2 ? #2866c9 : #52657f;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 12px; width: parent.width - 118px; height: 24px;
+                        text: "Custom Server"; font-size: 15px; font-weight: 600;
+                        color: WorkbenchStyle.text; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 38px; width: parent.width - 118px; height: 20px;
+                        text: "Connect to a compatible self-hosted server";
+                        font-size: 11px; color: WorkbenchStyle.muted;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 39px; y: 26px; width: 20px; height: 20px;
+                        border-radius: 10px; border-width: 2px;
+                        border-color: root.server-setup-provider == 2 ? #3275dc : #a5b4c9;
+                        background: root.server-setup-provider == 2 ? #3275dc : white;
+                        if root.server-setup-provider == 2: Rectangle {
+                            x: 6px; y: 6px; width: 8px; height: 8px;
+                            border-radius: 4px; background: white;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.server-setup-provider = 2;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                        }
+                    }
                 }
             }
             // Keep fields in a measured, scrollable layout. The dedicated
@@ -4350,13 +4453,28 @@ export component MainWindow inherits Window {
                     }
                 }
                 SettingsButton {
-                    width: 92px; primary: true; text: root.server-setup-busy ? "Working..." : "Finish";
-                    enabled: root.server-setup-page == 1 && !root.server-setup-busy && !root.server-setup-review-open
-                        && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1);
+                    width: 92px; primary: true;
+                    text: root.server-setup-page == 0 ? "Continue"
+                        : root.server-setup-busy ? "Working..." : "Finish";
+                    enabled: !root.server-setup-busy && !root.server-setup-review-open
+                        && (root.server-setup-page == 0
+                            || (root.server-setup-page == 1
+                                && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1)));
                     clicked => {
-                        root.server-setup-submit(root.server-setup-provider,
-                            root.server-setup-cloudflare-method, root.server-setup-host,
-                            root.server-setup-port, root.server-setup-token, root.server-setup-account);
+                        if root.server-setup-page == 0 {
+                            root.server-setup-page = 1;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                            if root.server-setup-provider == 1 {
+                                root.server-setup-cloudflare-method = 1;
+                                root.server-setup-need-account = false;
+                                root.server-setup-need-worker-url = false;
+                            }
+                        } else {
+                            root.server-setup-submit(root.server-setup-provider,
+                                root.server-setup-cloudflare-method, root.server-setup-host,
+                                root.server-setup-port, root.server-setup-token, root.server-setup-account);
+                        }
                     }
                 }
             }
