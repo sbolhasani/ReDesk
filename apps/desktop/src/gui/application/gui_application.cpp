@@ -1656,6 +1656,8 @@ void GuiApplication::ResetSettingsUi(bool gallery_window) {
   main->set_server_setup_cloudflare_configured(
       configured_provider == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE);
   main->set_server_setup_provider(static_cast<int32_t>(configured_provider));
+  main->set_configured_server_provider(static_cast<int32_t>(configured_provider));
+  main->set_configured_server_host(config_center_->GetSignalServerHost().c_str());
   main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
   main->set_language_index(language_button_value_);
   main->set_codec_index(video_encode_format_button_value_);
