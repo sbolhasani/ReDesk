@@ -36,6 +36,7 @@ struct BackendReview {
   bool turn_configured = false;
   std::string worker_version;
   bool existing_turn_key = false;
+  bool pending_turn_recovery = false;
   bool turn_keys_checked = false;
   bool update_safe = false;
   // Set only after the account API verifies the expected SignalHub binding.
@@ -99,6 +100,8 @@ class CloudflareProvisioningService {
   // Strict semantic version comparison; legacy workers report no version.
   // They may be manually updated only if Worker bindings were verified.
   static bool IsUpdateAvailable(const std::string& deployed_version);
+  // Local DPAPI recovery status only; never exposes the secret to the UI.
+  static bool HasPendingTurnRecovery(const std::string& account_id);
   Result ConfigureExisting(const SetupOptions& options,
                            std::string* signal_address) const;
   // Fresh deployment only. Existing Worker/TURN state always requires a
