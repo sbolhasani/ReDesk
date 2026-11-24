@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <string>
 #if defined(_WIN32)
 #define NOMINMAX
@@ -645,20 +646,49 @@ Result CloudflareProvisioningService::ProvisionNew(
   if (!keys.is_array()) return {false, "Unexpected TURN key list"};
   for (const auto& key : keys) {
     if (key.is_object() && key.value("name", "") == "redesk-signal")
-      return {false, "Existing ReDesk TURN key found: cannot recover secret or safely rotate it"};
+      return {false, "A ReDesk TURN key already exists. Fresh installation is blocked; "
+                     "recover its credentials before retrying."};
   }
 
+  const std::string subdomain_path =
+      "/client/v4/accounts/" + account + "/workers/subdomain";
   Json subdomain;
-  auto resolved = Decode(client.Get("/client/v4/accounts/" + account +
-                                    "/workers/subdomain", Authorization(token)),
-                         &subdomain);
-  if (!resolved.ok) return {false, "Could not resolve Workers subdomain: " + resolved.error};
-  const std::string name = subdomain.is_object()
-      ? subdomain.value("subdomain", "") : "";
-  std::string base_url;
+  auto current = client.Get(subdomain_path, Authorization(token));
+  if (!current) return {false, "Could not check Cloudflare Workers subdomain"};
+  std::string name;
+  if (current->status == 404) {
+    // The account is new. Never invent or overwrite an account subdomain.
+    // The user explicitly supplies the intended workers.dev URL first.
+    std::string requested_base;
+    if (!worker_url || !NormalizeWorkerUrl(*worker_url, &requested_base, nullptr))
+      return {false, "Enter the desired new Worker URL before Install"};
+    constexpr const char* kPrefix = "https://redesk-signal.";
+    constexpr const char* kSuffix = ".workers.dev";
+    if (requested_base.rfind(kPrefix, 0) != 0 ||
+        requested_base.size() <= std::strlen(kPrefix) + std::strlen(kSuffix) ||
+        requested_base.substr(requested_base.size() - std::strlen(kSuffix)) != kSuffix)
+      return {false, "Expected https://redesk-signal.YOUR-SUBDOMAIN.workers.dev"};
+    name = requested_base.substr(std::strlen(kPrefix),
+        requested_base.size() - std::strlen(kPrefix) - std::strlen(kSuffix));
+    if (name.size() < 3 || name.size() > 63 ||
+        !std::all_of(name.begin(), name.end(), [](unsigned char ch) {
+          return std::islower(ch) || std::isdigit(ch) || ch == '-';
+        }) || name.front() == '-' || name.back() == '-')
+      return {false, "Workers subdomain must contain 3-63 lowercase letters, digits or hyphens"};
+    if (progress) progress("Creating Workers Subdomain", "Running");
+    auto created = Decode(client.Put(subdomain_path, Authorization(token),
+        Json{{"subdomain", name}}.dump(), "application/json"), &subdomain);
+    if (!created.ok) return {false, "Workers subdomain setup failed: " + created.error};
+  } else {
+    auto resolved = Decode(current, &subdomain);
+    if (!resolved.ok) return {false, "Could not resolve Workers subdomain: " + resolved.error};
+    name = subdomain.is_object() ? subdomain.value("subdomain", "") : "";
+  }
   const std::string url = "https://redesk-signal." + name + ".workers.dev";
+  std::string base_url;
   if (!NormalizeWorkerUrl(url, &base_url, nullptr))
-    return {false, "Cloudflare account has no valid workers.dev subdomain"};
+    return {false, "Cloudflare returned an invalid Workers subdomain"};
+  if (worker_url) *worker_url = base_url;
 
   if (progress) progress("Deploying Worker", "Running");
   SetupOptions options;
@@ -675,22 +705,42 @@ Result CloudflareProvisioningService::ProvisionNew(
   // is removed. If a later step fails, report partial setup, never claim
   // success or silently create a second key on retry.
   if (progress) progress("Configuring TURN", "Running");
+#if !defined(_WIN32)
+  return {false, "Worker deployed. Automatic TURN setup requires Windows "
+                 "DPAPI credential recovery and is not available on this OS."};
+#else
+  // Fail before creating a key if the current Windows identity cannot
+  // initialize DPAPI. Never create untracked or duplicate credentials.
+  DATA_BLOB probe{1, reinterpret_cast<BYTE*>(const_cast<char*>("x"))};
+  DATA_BLOB protected_probe{};
+  if (!CryptProtectData(&probe, L"ReDesk TURN recovery", nullptr, nullptr,
+                        nullptr, CRYPTPROTECT_UI_FORBIDDEN, &protected_probe))
+    return {false, "Cannot protect TURN recovery credentials with Windows DPAPI"};
+  LocalFree(protected_probe.pbData);
+
   Json key;
   auto created = Decode(client.Post(turn_path, Authorization(token),
       Json{{"name", "redesk-signal"}}.dump(), "application/json"), &key);
   if (!created.ok) return {false, "Worker deployed but TURN creation failed: " + created.error};
   const auto uid = key.value("uid", "");
   const auto secret = key.value("key", key.value("secret", ""));
+  if (!IsHex32(uid) || secret.size() != 64)
+    return {false, "TURN key returned unexpected metadata. No replacement key will be created."};
+  if (!SavePendingKey(account, uid, secret))
+    return {false, "TURN key created, but encrypted recovery could not be stored. "
+                   "Do not retry key creation; inspect the Cloudflare account."};
   auto secrets = AddTurnSecrets(token, account, uid, secret);
   if (!secrets.ok)
-    return {false, "Worker deployed and TURN key created, but secret installation failed: " +
-                   secrets.error + ". Check Cloudflare before retrying."};
+    return {false, "Worker and TURN key created, but secrets installation failed: " +
+                   secrets.error + ". Encrypted recovery remains on this PC."};
+#endif
 
   if (progress) progress("Verifying Backend", "Running");
   auto health = CheckHealth(base_url);
   if (!health.redesk_health || !health.turn_configured)
     return {false, "Worker deployed but TURN/health verification failed; check Cloudflare state"};
   if (worker_url) *worker_url = base_url;
+  ClearPendingKey(account);
   if (progress) progress("Verifying Backend", "Completed");
   return {true, {}};
 }
