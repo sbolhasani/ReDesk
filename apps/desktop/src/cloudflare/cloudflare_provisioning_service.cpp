@@ -141,6 +141,12 @@ void ClearPendingKey(const std::string&) {}
 
 }
 
+bool CloudflareProvisioningService::HasPendingTurnRecovery(
+    const std::string& account) {
+  std::string uid, secret;
+  return IsHex32(account) && LoadPendingKey(account, &uid, &secret);
+}
+
 bool CloudflareProvisioningService::ValidAccountId(const std::string& value) {
   return IsHex32(value);
 }
@@ -530,6 +536,7 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
       }
     }
   }
+  review.pending_turn_recovery = HasPendingTurnRecovery(account);
   review.ok = true;
   if (review.redesk_health) {
     review.explanation = review.update_safe
@@ -537,14 +544,18 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
         : "Existing Worker is healthy. Use Existing is available.";
     if (!review.worker_version.empty())
       review.explanation += " Version: " + review.worker_version + ".";
+    if (review.pending_turn_recovery && !review.turn_configured)
+      review.explanation += " Pending TURN recovery is available on this Windows account.";
   } else if (review.worker_exists) {
     review.explanation = "Worker exists but /health is not compatible. No installation or overwrite is permitted.";
   } else if (!review.turn_keys_checked) {
     review.explanation = "No Worker was found, but TURN keys cannot be listed. "
                          "Installation is blocked until the token can inspect them.";
   } else if (review.existing_turn_key) {
-    review.explanation = "No Worker was found, but a ReDesk TURN key already exists. "
-                         "Installation is blocked to prevent credential loss.";
+    review.explanation = review.pending_turn_recovery
+        ? "ReDesk TURN key exists with local encrypted recovery. You can resume setup."
+        : "No Worker was found, but a ReDesk TURN key already exists without local recovery. "
+          "Installation is blocked to prevent credential loss.";
   } else {
     review.explanation = "No Worker or ReDesk TURN key found. "
                          "Ready to install a new Worker, Durable Object and TURN.";
@@ -630,10 +641,35 @@ Result CloudflareProvisioningService::ProvisionNew(
 
   if (progress) progress("Checking Existing Worker", "Running");
   auto prior = Inspect(token, account);
-  if (prior.worker_exists)
-    return {false, "Worker already exists. Use Existing Backend or confirm an update."};
+  std::string pending_uid, pending_secret;
+  const bool has_pending = LoadPendingKey(account, &pending_uid, &pending_secret);
+  if (prior.worker_exists) {
+    if (!has_pending || !prior.durable_object_binding)
+      return {false, "Worker already exists. Use Existing Backend or confirm an update."};
+    // Recover only if the Worker has a verified SignalHub binding and the
+    // current /health still identifies it as the ReDesk signaling service.
+    if (!worker_url || !CheckHealth(*worker_url).redesk_health)
+      return {false, "Pending TURN recovery exists, but Worker identity cannot be verified"};
+    Json keys;
+    auto client = Client(kApi);
+    auto listed = Decode(client.Get("/client/v4/accounts/" + account +
+                         "/calls/turn_keys", Authorization(token)), &keys);
+    if (!listed.ok || !keys.is_array())
+      return {false, "Cannot inspect TURN keys before recovery"};
+    bool matches = false;
+    for (const auto& key : keys)
+      if (key.is_object() && key.value("uid", "") == pending_uid &&
+          key.value("name", "") == "redesk-signal") matches = true;
+    if (!matches) return {false, "Pending TURN key no longer matches Cloudflare"};
+    const auto set = AddTurnSecrets(token, account, pending_uid, pending_secret);
+    if (!set.ok) return {false, "TURN recovery failed: " + set.error};
+    if (!CheckHealth(*worker_url).turn_configured)
+      return {false, "TURN recovery installed secrets, but health is not yet ready"};
+    ClearPendingKey(account);
+    return {true, {}};
+  }
   if (prior.diagnostic != "Worker does not exist")
-    return {false, "Cannot safely determine whether Worker exists: " + prior.diagnostic};
+    return {false, "Cannot safely determine Worker existence: " + prior.diagnostic};
 
   auto client = Client(kApi);
   if (progress) progress("Configuring TURN", "Running");
@@ -644,11 +680,18 @@ Result CloudflareProvisioningService::ProvisionNew(
   auto listed = Decode(client.Get(turn_path, Authorization(token)), &keys);
   if (!listed.ok) return {false, "Could not inspect existing TURN keys: " + listed.error};
   if (!keys.is_array()) return {false, "Unexpected TURN key list"};
+  bool matched_pending_key = false;
   for (const auto& key : keys) {
-    if (key.is_object() && key.value("name", "") == "redesk-signal")
-      return {false, "A ReDesk TURN key already exists. Fresh installation is blocked; "
-                     "recover its credentials before retrying."};
+    if (key.is_object() && key.value("name", "") == "redesk-signal") {
+      if (!has_pending || key.value("uid", "") != pending_uid)
+        return {false, "Existing ReDesk TURN key cannot be safely recovered. "
+                       "No duplicate key will be created."};
+      matched_pending_key = true;
+    }
   }
+  if (has_pending && !matched_pending_key)
+    return {false, "Encrypted TURN recovery exists, but Cloudflare key is missing. "
+                   "Manual reconciliation required."};
 
   const std::string subdomain_path =
       "/client/v4/accounts/" + account + "/workers/subdomain";
@@ -718,17 +761,21 @@ Result CloudflareProvisioningService::ProvisionNew(
     return {false, "Cannot protect TURN recovery credentials with Windows DPAPI"};
   LocalFree(protected_probe.pbData);
 
-  Json key;
-  auto created = Decode(client.Post(turn_path, Authorization(token),
-      Json{{"name", "redesk-signal"}}.dump(), "application/json"), &key);
-  if (!created.ok) return {false, "Worker deployed but TURN creation failed: " + created.error};
-  const auto uid = key.value("uid", "");
-  const auto secret = key.value("key", key.value("secret", ""));
-  if (!IsHex32(uid) || secret.size() != 64)
-    return {false, "TURN key returned unexpected metadata. No replacement key will be created."};
-  if (!SavePendingKey(account, uid, secret))
-    return {false, "TURN key created, but encrypted recovery could not be stored. "
-                   "Do not retry key creation; inspect the Cloudflare account."};
+  std::string uid = pending_uid;
+  std::string secret = pending_secret;
+  if (!matched_pending_key) {
+    Json key;
+    auto created = Decode(client.Post(turn_path, Authorization(token),
+        Json{{"name", "redesk-signal"}}.dump(), "application/json"), &key);
+    if (!created.ok) return {false, "Worker deployed but TURN creation failed: " + created.error};
+    uid = key.value("uid", "");
+    secret = key.value("key", key.value("secret", ""));
+    if (!IsHex32(uid) || secret.size() != 64)
+      return {false, "TURN key returned unexpected metadata. No replacement key will be created."};
+    if (!SavePendingKey(account, uid, secret))
+      return {false, "TURN key created but encrypted recovery could not be stored. "
+                     "Do not retry key creation; inspect the Cloudflare account."};
+  }
   auto secrets = AddTurnSecrets(token, account, uid, secret);
   if (!secrets.ok)
     return {false, "Worker and TURN key created, but secrets installation failed: " +
@@ -748,9 +795,10 @@ Result CloudflareProvisioningService::ProvisionNew(
 Result CloudflareProvisioningService::AddTurnSecrets(
     const std::string& token, const std::string& account,
     const std::string& key_id, const std::string& secret) const {
+  // Cloudflare TURN bearer tokens are 64 bytes, not necessarily hex.
   if (!IsHex32(account) || !IsHex32(key_id) || secret.size() != 64 ||
       !std::all_of(secret.begin(), secret.end(), [](unsigned char c) {
-        return std::isxdigit(c) != 0;
+        return c >= 33 && c <= 126;
       })) return {false, "Invalid TURN key metadata"};
   auto client = Client(kApi);
   const auto path = Prefix(account) + "/secrets";
