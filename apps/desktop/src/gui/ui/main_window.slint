@@ -802,6 +802,9 @@ export component MainWindow inherits Window {
     in-out property <bool> server-setup-need-worker-url: false;
     in-out property <bool> server-setup-token-verified: false;
     in-out property <bool> server-setup-cloudflare-configured: false;
+    in-out property <int> configured-server-provider: 0;
+    in-out property <string> configured-server-host: "";
+    in-out property <bool> server-setup-switch-confirm: false;
     in-out property <bool> server-setup-postconnect: false;
     in-out property <string> server-setup-deployed-version: "Unknown";
     in-out property <string> server-setup-bundled-version: "1.0.0";
@@ -3008,7 +3011,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         SettingsGroup {
-                            title: GalleryStrings.texts[116]; rows: 6;
+                            title: GalleryStrings.texts[116]; rows: 7;
                             SettingsToggleRow {
                                 label: GalleryStrings.texts[117];
                                 checked <=> root.ip-direct-enabled-draft;
@@ -3043,20 +3046,35 @@ export component MainWindow inherits Window {
                             // The unified server picker replaces the legacy self-hosted
                             // toggle/editor and is the only entry point from Settings.
                             Rectangle {
-                                width: parent.width; height: 72px;
+                                width: parent.width; height: 108px;
                                 Text {
-                                    x: 12px; y: 3px; width: parent.width - 24px; height: 25px;
+                                    x: 12px; y: 3px; width: parent.width - 24px; height: 22px;
                                     text: "Signaling Server"; font-size: 12px;
                                     color: WorkbenchStyle.text; vertical-alignment: center;
                                 }
+                                Text {
+                                    x: 12px; y: 25px; width: parent.width - 24px; height: 20px;
+                                    text: root.configured-server-provider == 1 ? "Cloudflare"
+                                        : root.configured-server-provider == 2 ? "Custom Server"
+                                        : "CrossDesk Public Server";
+                                    color: WorkbenchStyle.text; font-size: 12px;
+                                    font-weight: 600; vertical-alignment: center;
+                                }
+                                Text {
+                                    x: 12px; y: 44px; width: parent.width - 24px; height: 18px;
+                                    text: root.configured-server-host;
+                                    color: WorkbenchStyle.muted; font-size: 11px;
+                                    overflow: elide; vertical-alignment: center;
+                                }
                                 SettingsButton {
-                                    x: 12px; y: 35px;
+                                    x: 12px; y: 66px;
                                     width: parent.width - 24px; height: 28px;
                                     text: "Change Server";
                                     enabled: !root.settings-session-active;
                                     clicked => {
                                         root.settings-open = false;
                                         root.server-setup-postconnect = false;
+                                        root.server-setup-switch-confirm = false;
                                         root.server-setup-open = true;
                                         root.server-setup-page = 0;
                                     }
@@ -4011,19 +4029,27 @@ export component MainWindow inherits Window {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: min(600px, parent.width - 24px);
-            height: min(650px, parent.height - 24px);
+            height: min(790px, parent.height - 24px);
             background: #f8fafc;
             outline-color: UiSurface.edge;
             TouchArea { scroll-event(event) => { accept } }
             Text {
                 x: 22px; y: 20px; width: parent.width - 44px; height: 30px;
                 text: root.server-setup-review-open ? "Review Cloudflare Backend"
-                    : root.server-setup-page == 0 ? "Choose a server" : "Configure server";
+                    : root.server-setup-page == 0 ? "1. Choose a server"
+                    : root.server-setup-provider == 1 ? "2. Connect Cloudflare"
+                    : "2. Configure server";
                 font-size: 21px; font-weight: 600; color: WorkbenchStyle.text;
             }
             Text {
                 x: 22px; y: 56px; width: parent.width - 44px; height: 42px;
-                text: "Select where ReDesk connects for signaling. Existing device identity is preserved.";
+                text: root.server-setup-review-open
+                    ? "3. Review backend components and confirm the requested operation."
+                    : root.server-setup-page == 0
+                    ? "Select a signaling provider. Your device identity is preserved."
+                    : root.server-setup-provider == 1
+                    ? "Enter your API token and account ID. ReDesk checks the backend before making changes."
+                    : "Your previous server remains configured until the new selection succeeds.";
                 font-size: 12px; wrap: word-wrap; color: WorkbenchStyle.muted;
             }
             if root.server-setup-postconnect && !root.server-setup-review-open: Text {
@@ -4044,6 +4070,22 @@ export component MainWindow inherits Window {
                 Text {
                     text: "Worker: redesk-signal";
                     color: WorkbenchStyle.text; font-weight: 600; font-size: 13px;
+                }
+                Text {
+                    text: root.server-setup-review-existing ? "Worker: Existing" : "Worker: Not installed";
+                    color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-review-existing
+                        ? (root.server-setup-review-can-update ? "Durable Object: Verified" : "Durable Object: Inspect before updating")
+                        : "Durable Object: Will be created during installation";
+                    color: WorkbenchStyle.text; font-size: 12px; wrap: word-wrap;
+                }
+                Text {
+                    text: root.server-setup-review-turn-key
+                        ? "TURN: Existing key found" : root.server-setup-review-turn-checked
+                        ? "TURN: Not configured" : "TURN: Verification unavailable";
+                    color: WorkbenchStyle.text; font-size: 12px;
                 }
                 Text {
                     text: root.server-setup-review-url;
@@ -4404,13 +4446,46 @@ export component MainWindow inherits Window {
                                 Rectangle { horizontal-stretch: 1; }
                                 SettingsButton {
                                     width: 188px; height: 34px; primary: true;
-                                    text: root.server-setup-busy ? "Fetching..." : "Fetch Cloudflare";
+                                    text: root.server-setup-busy ? "Checking..." : "Check Backend";
                                     enabled: !root.server-setup-busy && root.server-setup-token != "";
                                     clicked => {
                                         root.server-setup-validate-token(root.server-setup-token);
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            if root.server-setup-switch-confirm: Rectangle {
+                x: 22px; y: 110px; width: parent.width - 44px;
+                height: 184px; background: #fff8ec; border-radius: UiRadius.control;
+                border-width: 1px; border-color: #e5bb78;
+                Text {
+                    x: 14px; y: 12px; width: parent.width - 28px; height: 38px;
+                    text: "Confirm signaling server change";
+                    color: WorkbenchStyle.text; font-weight: 600; font-size: 15px;
+                }
+                Text {
+                    x: 14px; y: 49px; width: parent.width - 28px; height: 58px;
+                    text: "Switching signaling servers may prevent devices using the previous backend from discovering each other. Your existing configuration is kept if the change fails.";
+                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 11px;
+                }
+                HorizontalLayout {
+                    x: 14px; y: 122px; width: parent.width - 28px; height: 34px;
+                    spacing: 8px;
+                    SettingsButton {
+                        width: 110px; height: 34px; text: "Go Back";
+                        clicked => { root.server-setup-switch-confirm = false; }
+                    }
+                    SettingsButton {
+                        width: 170px; height: 34px; primary: true;
+                        text: "Confirm Change";
+                        clicked => {
+                            root.server-setup-switch-confirm = false;
+                            root.server-setup-submit(root.server-setup-provider,
+                                root.server-setup-cloudflare-method, root.server-setup-host,
+                                root.server-setup-port, root.server-setup-token, root.server-setup-account);
                         }
                     }
                 }
@@ -4448,12 +4523,15 @@ export component MainWindow inherits Window {
                     width: 84px; text: "Back";
                     enabled: root.server-setup-page > 0 && !root.server-setup-busy;
                     clicked => {
+                        root.server-setup-switch-confirm = false;
                         if root.server-setup-review-open {
                             root.server-setup-review-open = false;
                             root.server-setup-confirm-update = false;
                             root.server-setup-close();
+                            root.server-setup-page = 1;
+                        } else {
+                            root.server-setup-page = 0;
                         }
-                        root.server-setup-page = 0;
                         root.server-setup-error = "";
                     }
                 }
@@ -4463,6 +4541,7 @@ export component MainWindow inherits Window {
                     enabled: !root.server-setup-busy;
                     clicked => {
                         root.server-setup-close();
+                        root.server-setup-switch-confirm = false;
                         root.server-setup-open = false;
                         root.server-setup-review-open = false;
                         root.server-setup-confirm-update = false;
@@ -4475,6 +4554,7 @@ export component MainWindow inherits Window {
                     text: root.server-setup-page == 0 ? "Continue"
                         : root.server-setup-busy ? "Working..." : "Finish";
                     enabled: !root.server-setup-busy && !root.server-setup-review-open
+                        && !root.server-setup-switch-confirm
                         && (root.server-setup-page == 0
                             || (root.server-setup-page == 1
                                 && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1)));
@@ -4488,6 +4568,8 @@ export component MainWindow inherits Window {
                                 root.server-setup-need-account = true;
                                 root.server-setup-need-worker-url = false;
                             }
+                        } else if root.server-setup-provider != root.configured-server-provider {
+                            root.server-setup-switch-confirm = true;
                         } else {
                             root.server-setup-submit(root.server-setup-provider,
                                 root.server-setup-cloudflare-method, root.server-setup-host,
