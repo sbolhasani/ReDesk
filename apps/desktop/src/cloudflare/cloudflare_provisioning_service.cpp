@@ -7,6 +7,12 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#include <wincrypt.h>
+#pragma comment(lib, "crypt32.lib")
+#endif
 
 namespace crossdesk::cloudflare {
 namespace {
@@ -55,6 +61,83 @@ bool IsHex32(const std::string& value) {
   return value.size() == 32 && std::all_of(value.begin(), value.end(),
     [](unsigned char ch) { return std::isxdigit(ch) != 0; });
 }
+// Staged recovery for freshly created TURN credentials. A TURN secret is
+// returned only once. Never create a replacement key after partial failure.
+// Windows DPAPI protects the pending file using the current user context.
+#if defined(_WIN32)
+std::string RecoveryFile(const std::string& account) {
+  const char* local = std::getenv("LOCALAPPDATA");
+  if (!local || !*local) return {};
+  return std::string(local) + "\\\\ReDesk\\\\cloudflare-turn-" + account + ".bin";
+}
+bool SavePendingKey(const std::string& account, const std::string& uid,
+                    const std::string& secret) {
+  const auto path = RecoveryFile(account);
+  if (path.empty()) return false;
+  const std::string plain = uid + "\\n" + secret;
+  DATA_BLOB input{static_cast<DWORD>(plain.size()),
+                  reinterpret_cast<BYTE*>(const_cast<char*>(plain.data()))};
+  DATA_BLOB encrypted{};
+  if (!CryptProtectData(&input, L"ReDesk TURN recovery", nullptr, nullptr, nullptr,
+                        CRYPTPROTECT_UI_FORBIDDEN, &encrypted)) return false;
+  const auto root = path.substr(0, path.find_last_of("\\\\"));
+  CreateDirectoryA(root.c_str(), nullptr);
+  HANDLE file = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  bool ok = false;
+  if (file != INVALID_HANDLE_VALUE) {
+    DWORD written = 0;
+    ok = WriteFile(file, encrypted.pbData, encrypted.cbData, &written, nullptr) &&
+         written == encrypted.cbData && FlushFileBuffers(file);
+    CloseHandle(file);
+  }
+  LocalFree(encrypted.pbData);
+  return ok;
+}
+bool LoadPendingKey(const std::string& account,
+                    std::string* uid, std::string* secret) {
+  const auto path = RecoveryFile(account);
+  if (path.empty()) return false;
+  HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  DWORD size = GetFileSize(file, nullptr);
+  bool loaded = false;
+  if (size > 0 && size <= 2048) {
+    std::vector<BYTE> bytes(size);
+    DWORD read = 0;
+    if (ReadFile(file, bytes.data(), size, &read, nullptr) && read == size) {
+      DATA_BLOB input{size, bytes.data()}, decrypted{};
+      if (CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr,
+                             CRYPTPROTECT_UI_FORBIDDEN, &decrypted)) {
+        std::string plain(reinterpret_cast<char*>(decrypted.pbData),
+                          decrypted.cbData);
+        auto sep = plain.find('\\n');
+        if (sep != std::string::npos) {
+          *uid = plain.substr(0, sep);
+          *secret = plain.substr(sep + 1);
+          loaded = IsHex32(*uid) && secret->size() == 64;
+        }
+        SecureZeroMemory(decrypted.pbData, decrypted.cbData);
+        LocalFree(decrypted.pbData);
+      }
+    }
+  }
+  CloseHandle(file);
+  return loaded;
+}
+void ClearPendingKey(const std::string& account) {
+  const auto file = RecoveryFile(account);
+  if (!file.empty()) DeleteFileA(file.c_str());
+}
+#else
+bool SavePendingKey(const std::string&, const std::string&,
+                    const std::string&) { return false; }
+bool LoadPendingKey(const std::string&, std::string*, std::string*) { return false; }
+void ClearPendingKey(const std::string&) {}
+#endif
+
+
 }
 
 bool CloudflareProvisioningService::ValidAccountId(const std::string& value) {
