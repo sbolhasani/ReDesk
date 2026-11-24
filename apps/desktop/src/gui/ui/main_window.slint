@@ -770,7 +770,7 @@ export component MainWindow inherits Window {
     in-out property <bool> privacy-on-connect-enabled: true;
     in-out property <bool> privacy-local-unlock-allowed: true;
     in property <bool> lock-on-disconnect-available: false;
-    in-out property <bool> lock-on-disconnect-enabled: true;
+    in-out property <bool> lock-on-disconnect-enabled: false;
     in-out property <bool> trusted-devices-only: false;
     in-out property <bool> trusted-devices-open: false;
     in property <[TrustedDeviceEntry]> trusted-devices;
@@ -3308,54 +3308,6 @@ export component MainWindow inherits Window {
             SurfaceSeparator { x: 18px; y: parent.height - 66px; width: parent.width - 36px; height: 1px; outline-color: UiSurface.separator; }
             SettingsButton { x: parent.width - 114px; y: parent.height - 50px; width: 92px; primary: true; text: UiStrings.ok; clicked => { if root.save-self-hosted-settings() { root.self-host-settings-open = false; } } }
             SettingsButton { x: parent.width - 124px - self.width; y: parent.height - 50px; width: max(80px, self.label-width); text: UiStrings.cancel; clicked => { root.cancel-self-hosted-settings(); root.self-host-settings-open = false; } }
-        }
-    }
-
-    if root.sponsorship-open && root.sponsorship-unobstructed: Rectangle {
-        background: #15223850;
-        z: 38;
-        TouchArea { clicked => { focus-sink.focus(); } }
-        SettingsDialog {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: min(480px, parent.width - 40px);
-            height: self.content-top + sponsorship-content.preferred-height + 24px;
-            title: UiStrings.sponsorship-title;
-            show-close-button: false;
-            sponsorship-content := VerticalLayout {
-                x: 24px; y: parent.content-top;
-                width: parent.width - 48px; height: self.preferred-height;
-                padding: 0px; spacing: 20px;
-                Text {
-                    text: UiStrings.sponsorship-message;
-                    color: WorkbenchStyle.text; font-size: 14px; wrap: word-wrap;
-                    // Match message bodies' 1.5em line height for wrapped text.
-                    font-family: "CrossDesk Message Spacing";
-                }
-                SponsorshipSection {
-                    show-title: false;
-                    open-afdian => { root.open-afdian-sponsor(); }
-                    open-kofi => { root.open-kofi-sponsor(); }
-                    open-github => { root.open-github-sponsor(); }
-                }
-                Text {
-                    text: UiStrings.sponsorship-dismiss-hint;
-                    color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;
-                    font-family: "CrossDesk Message Spacing";
-                }
-                SurfaceSeparator { height: 1px; outline-color: UiSurface.separator; }
-                HorizontalLayout {
-                    alignment: end;
-                    SettingsButton {
-                        width: max(80px, sponsorship-close-metrics.preferred-width + 24px);
-                        primary: true; text: MessageStrings.close;
-                        clicked => { root.dismiss-sponsorship(); }
-                        sponsorship-close-metrics := Text {
-                            visible: false; text: MessageStrings.close; font-size: 12px;
-                        }
-                    }
-                }
-            }
         }
     }
 
