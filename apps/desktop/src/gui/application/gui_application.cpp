@@ -1021,6 +1021,7 @@ struct GuiApplication::SlintUi {
     bool needs_worker_url = false;
     bool discovery_attempt = false;
     bool health_retry = false;
+    bool worker_version_probe = false;
     std::string discovered_account_id;
     // Used only for discarding stale read-only fetch responses when the user
     // edits the token while a request is in progress; not logged or persisted.
@@ -1542,6 +1543,9 @@ void GuiApplication::InitializeUi() {
   ResetSettingsUi();
   ResetSettingsUi(true);
   ui_->main->set_server_setup_open(!config_center_->IsServerSelectionCompleted());
+  ui_->main->set_server_setup_cloudflare_configured(
+      config_center_->GetServerProvider() == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE);
+  ui_->main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
   BindMainCallbacks();
   BindMainCallbacks(true);
   InitializeSystemTray();
@@ -2072,6 +2076,51 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     ui_->server_setup_pending_token.clear();
     ui_->server_setup_review = {};
   });
+  main->on_server_setup_manage_worker([this, main] {
+    if (config_center_->GetServerProvider() != ConfigCenter::SERVER_PROVIDER::CLOUDFLARE) {
+      main->set_server_setup_error("Cloudflare is not the configured signaling provider.");
+      return;
+    }
+    if (ui_->server_setup_future.valid()) {
+      main->set_server_setup_error("A Cloudflare operation is still running.");
+      return;
+    }
+    const std::string configured(config_center_->GetSignalServerHost());
+    std::string worker_url;
+    if (!cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+            "https://" + configured, &worker_url, nullptr)) {
+      main->set_server_setup_error("Configured Cloudflare Worker address is invalid.");
+      return;
+    }
+    main->set_server_setup_provider(1);
+    main->set_server_setup_cloudflare_method(1);
+    main->set_server_setup_postconnect(true);
+    main->set_server_setup_page(1);
+    main->set_server_setup_review_open(false);
+    main->set_server_setup_confirm_update(false);
+    main->set_server_setup_need_account(false);
+    main->set_server_setup_need_worker_url(false);
+    main->set_server_setup_host(worker_url.c_str());
+    main->set_server_setup_account("");
+    main->set_server_setup_token("");
+    main->set_server_setup_reveal_token(false);
+    main->set_server_setup_deployed_version("Checking...");
+    main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
+    main->set_server_setup_error("");
+    main->set_server_setup_status("Checking installed Worker version...");
+    main->set_server_setup_busy(true);
+    main->set_server_setup_open(true);
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    ui_->server_setup_future = std::async(std::launch::async, [worker_url] {
+      const auto status = cloudflare::CloudflareProvisioningService{}.CheckHealth(worker_url);
+      SlintUi::ServerSetupResult result;
+      result.worker_version_probe = true;
+      result.ok = status.redesk_health;
+      result.message = status.diagnostic;
+      result.review.worker_version = status.worker_version;
+      return result;
+    });
+  });
   main->on_server_setup_retry_health([this, main] {
     if (ui_->server_setup_future.valid() || main->get_server_setup_busy()) {
       main->set_server_setup_error("Another Cloudflare operation is still running.");
@@ -2122,6 +2171,7 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       }
       ui_->server_setup_pending_token.clear();
       ui_->server_setup_review = {};
+      main->set_server_setup_cloudflare_configured(true);
       main->set_server_setup_review_open(false);
       main->set_server_setup_open(false);
       main->set_server_setup_status("");
@@ -2134,7 +2184,12 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       return;
     }
     if (action == 2 && (!review.worker_exists || !review.update_safe)) {
-      main->set_server_setup_error("Worker update blocked by compatibility checks.");
+      main->set_server_setup_error("Worker update blocked by compatibility or version checks.");
+      return;
+    }
+    if (action == 2 && HasActiveSession()) {
+      main->set_server_setup_error(
+          "Disconnect active remote sessions before updating the Worker.");
       return;
     }
     const std::string token = ui_->server_setup_pending_token;
@@ -2308,6 +2363,9 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       return;
     }
     main->set_server_setup_token("");
+    main->set_server_setup_cloudflare_configured(
+        config_center_->GetServerProvider() ==
+            ConfigCenter::SERVER_PROVIDER::CLOUDFLARE);
     main->set_server_setup_open(false);
     main->set_server_setup_status("");
     ApplySettingsFromConfig(true);
@@ -2899,11 +2957,22 @@ void GuiApplication::Tick() {
     } else {
     window->set_server_setup_busy(false);
     window->set_server_setup_status("");
-    // A health retry only reads /health and refreshes the existing review.
-    // No Worker, TURN secret, or local configuration is changed on Retry.
-    if (result.health_retry) {
+    // A post-connection version probe needs no API token. It only calls
+    // the public Worker /health endpoint and never updates the Worker.
+    if (result.worker_version_probe) {
+      window->set_server_setup_deployed_version(
+          result.review.worker_version.empty()
+              ? (result.ok ? "Unknown (legacy)" : "Unavailable")
+              : result.review.worker_version.c_str());
+      window->set_server_setup_status(result.ok
+          ? "Enter a Cloudflare API Token and Fetch to review available updates."
+          : "Worker health unavailable. You can still Fetch with your token.");
+    } else if (result.health_retry) {
       if (window->get_server_setup_review_open()) {
         ui_->server_setup_review = result.review;
+        window->set_server_setup_deployed_version(
+            result.review.worker_version.empty()
+                ? "Unknown (legacy)" : result.review.worker_version.c_str());
         window->set_server_setup_review_description(result.message.c_str());
         window->set_server_setup_review_existing(result.review.worker_exists);
         window->set_server_setup_review_can_use(result.review.redesk_health);
@@ -2937,6 +3006,9 @@ void GuiApplication::Tick() {
         ui_->server_setup_pending_token =
             std::string(window->get_server_setup_token());
         ui_->server_setup_review = result.review;
+        window->set_server_setup_deployed_version(
+            result.review.worker_version.empty()
+                ? "Unknown (legacy)" : result.review.worker_version.c_str());
         window->set_server_setup_review_open(true);
         window->set_server_setup_review_description(result.message.c_str());
         window->set_server_setup_review_url(result.review.worker_url.c_str());
@@ -2957,6 +3029,9 @@ void GuiApplication::Tick() {
       window->set_server_setup_status(result.ok ? "Cloudflare API token is active." : "");
     } else if (result.review_ready) {
       ui_->server_setup_review = result.review;
+      window->set_server_setup_deployed_version(
+          result.review.worker_version.empty()
+              ? "Unknown (legacy)" : result.review.worker_version.c_str());
       window->set_server_setup_review_open(true);
       window->set_server_setup_review_description(result.message.c_str());
       window->set_server_setup_review_url(result.review.worker_url.c_str());
@@ -2982,6 +3057,8 @@ void GuiApplication::Tick() {
       ui_->server_setup_review = {};
       window->set_server_setup_token("");
       window->set_server_setup_review_open(false);
+      window->set_server_setup_cloudflare_configured(true);
+      window->set_server_setup_deployed_version(cloudflare::kReDeskWorkerVersion);
       window->set_server_setup_open(false);
       ApplySettingsFromConfig(true);
     }
