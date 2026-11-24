@@ -2989,6 +2989,8 @@ void GuiApplication::Tick() {
                 ? "Unknown (legacy)" : result.review.worker_version.c_str());
         window->set_server_setup_review_description(result.message.c_str());
         window->set_server_setup_review_existing(result.review.worker_exists);
+        window->set_server_setup_review_do_binding(result.review.durable_object_binding);
+        window->set_server_setup_review_turn_configured(result.review.turn_configured);
         window->set_server_setup_review_can_use(result.review.redesk_health);
         window->set_server_setup_review_can_update(result.review.update_safe);
         window->set_server_setup_review_can_install(
@@ -3035,6 +3037,8 @@ void GuiApplication::Tick() {
         window->set_server_setup_review_description(result.message.c_str());
         window->set_server_setup_review_url(result.review.worker_url.c_str());
         window->set_server_setup_review_existing(result.review.worker_exists);
+        window->set_server_setup_review_do_binding(result.review.durable_object_binding);
+        window->set_server_setup_review_turn_configured(result.review.turn_configured);
         window->set_server_setup_review_can_use(
             result.review.worker_exists && result.review.redesk_health);
         window->set_server_setup_review_can_update(result.review.update_safe);
@@ -3069,6 +3073,8 @@ void GuiApplication::Tick() {
       window->set_server_setup_review_description(result.message.c_str());
       window->set_server_setup_review_url(result.review.worker_url.c_str());
       window->set_server_setup_review_existing(result.review.worker_exists);
+        window->set_server_setup_review_do_binding(result.review.durable_object_binding);
+        window->set_server_setup_review_turn_configured(result.review.turn_configured);
       window->set_server_setup_review_can_use(
           result.review.worker_exists && result.review.redesk_health);
       window->set_server_setup_review_can_update(result.review.update_safe);
