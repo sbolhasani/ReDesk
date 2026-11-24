@@ -333,79 +333,64 @@ BackendDiscovery CloudflareProvisioningService::DiscoverBackend(
     const std::string& token, const std::string& requested_account,
     const std::string& requested_url) const {
   BackendDiscovery discovery;
+  discovery.needs_account_id = true; // Account-scoped template tokens cannot list accounts.
   if (token.empty()) {
-    discovery.message = "Enter your Cloudflare API Token to fetch the backend.";
+    discovery.message = "Enter your Cloudflare API Token.";
     return discovery;
   }
-  std::string account = requested_account;
-  if (account.empty()) {
-    // An account-owned token cannot be verified without an Account ID. Ask
-    // only now, not before the user presses Fetch.
-    if (token.rfind("cfat_", 0) == 0) {
-      discovery.needs_account_id = true;
-      discovery.message = "This is an account-owned token. Enter its Cloudflare Account ID and fetch again.";
-      return discovery;
-    }
-    auto check = ValidateToken(token);
-    if (!check.ok && token.rfind("cfut_", 0) == 0) {
-      discovery.message = check.error;
-      return discovery;
-    }
-    // Older unprefixed account tokens may fail the user verify endpoint.
-    // Account discovery is best-effort; inability to list accounts is NOT
-    // evidence that the token is invalid.
-    std::string error;
-    const auto accounts = ListAccounts(token, &error);
-    if (accounts.size() != 1) {
-      discovery.needs_account_id = true;
-      discovery.message = accounts.size() > 1
-          ? "Multiple accounts are accessible. Enter the Account ID to use."
-          : "Cloudflare could not identify one account automatically. "
-            "Enter the Account ID and fetch again. " + error;
-      return discovery;
-    }
-    account = accounts.front().id;
-  }
-  if (!ValidAccountId(account)) {
-    discovery.needs_account_id = true;
-    discovery.message = "Enter a valid 32-character Cloudflare Account ID.";
+  if (!IsHex32(requested_account)) {
+    discovery.message = "Enter the 32-character Cloudflare Account ID for this token.";
     return discovery;
   }
-  discovery.account_id = account;
-  auto checked = ValidateToken(token, account);
-  if (!checked.ok) {
-    discovery.message = checked.error;
-    return discovery;
-  }
+  const auto verified = ValidateToken(token, requested_account);
+  if (!verified.ok) { discovery.message = verified.error; return discovery; }
   discovery.token_verified = true;
+  discovery.account_id = requested_account;
+
+  // Check the Worker FIRST. A new account may legitimately have no
+  // workers.dev subdomain. This must not block the fresh install flow.
+  const auto worker = Inspect(token, requested_account);
+  if (!worker.worker_exists && worker.diagnostic != "Worker does not exist") {
+    discovery.message = "Could not verify Worker absence: " + worker.diagnostic;
+    return discovery;
+  }
 
   std::string url = requested_url;
   if (url.empty()) {
     auto client = Client(kApi);
     Json subdomain;
-    auto resolved = Decode(
-        client.Get("/client/v4/accounts/" + account +
-                   "/workers/subdomain", Authorization(token)), &subdomain);
-    if (!resolved.ok) {
-      discovery.needs_worker_url = true;
-      discovery.message =
-          "Token verified, but Cloudflare could not read the Workers subdomain ("
-          + resolved.error +
-          "). Enter your existing Worker HTTPS URL; no account settings "
-          "or Worker code will be changed.";
-      return discovery;
+    auto response = client.Get("/client/v4/accounts/" + requested_account +
+                               "/workers/subdomain", Authorization(token));
+    if (response && response->status == 404 && !worker.worker_exists) {
+      // A documented account initialization state. The candidate is created
+      // only after explicit Install confirmation, not during Fetch.
+      url = "https://redesk-signal.redesk-" +
+            requested_account.substr(0, 12) + ".workers.dev";
+    } else {
+      auto resolved = Decode(response, &subdomain);
+      if (!resolved.ok) {
+        if (worker.worker_exists) {
+          discovery.needs_worker_url = true;
+          discovery.message = "Existing Worker found; could not discover its URL (" +
+                              resolved.error + "). Enter the Worker HTTPS URL.";
+        } else {
+          discovery.message = "Could not verify Workers subdomain state: " +
+                              resolved.error + ". Nothing was installed.";
+        }
+        return discovery;
+      }
+      const auto name = subdomain.is_object()
+          ? subdomain.value("subdomain", "") : std::string{};
+      url = "https://redesk-signal." + name + ".workers.dev";
     }
-    const auto name = subdomain.is_object()
-        ? subdomain.value("subdomain", "") : std::string{};
-    url = "https://redesk-signal." + name + ".workers.dev";
   }
   if (!NormalizeWorkerUrl(url, nullptr, nullptr)) {
     discovery.needs_worker_url = true;
-    discovery.message =
-        "Worker URL must be an HTTPS hostname, optionally ending in /signal.";
+    discovery.message = "Enter a valid HTTPS Worker URL.";
     return discovery;
   }
-  discovery.review = ReviewAccount(token, account, url);
+
+  discovery.review = ReviewAccount(token, requested_account, url);
   discovery.review_ready = discovery.review.ok;
   discovery.message = discovery.review.explanation;
   return discovery;
@@ -420,32 +405,29 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
     review.explanation = "Invalid Cloudflare Account ID";
     return review;
   }
-  auto checked = ValidateToken(token, account);
-  if (!checked.ok) {
-    review.explanation = checked.error;
-    return review;
-  }
+  const auto checked = ValidateToken(token, account);
+  if (!checked.ok) { review.explanation = checked.error; return review; }
   if (!NormalizeWorkerUrl(provided_url, &review.worker_url, nullptr)) {
     review.explanation = "Enter a valid HTTPS Worker URL";
     return review;
   }
-  // The public health check does not receive the user's API token and works
-  // even when the token lacks Worker Scripts Read. It allows Use Existing
-  // without elevated provisioning rights.
-  const auto health = CheckHealth(review.worker_url);
-  const auto worker = Inspect(token, account, review.worker_url);
+
+  const auto worker = Inspect(token, account);
+  if (!worker.worker_exists && worker.diagnostic != "Worker does not exist") {
+    review.explanation = "Cannot confirm Worker absence: " + worker.diagnostic;
+    return review;
+  }
   review.worker_exists = worker.worker_exists;
   review.durable_object_binding = worker.durable_object_binding;
-  // Preserve binding evidence independently of the transient health result.
-  // The deployment path still performs its own fresh safety verification.
   review.worker_bindings_verified =
       worker.worker_exists && worker.durable_object_binding &&
       !worker.unexpected_bindings;
-  review = WithHealthStatus(review, health);
+  if (worker.worker_exists) {
+    review = WithHealthStatus(review, CheckHealth(review.worker_url));
+  }
 
-  // TURN enumeration is optional for reusing an existing healthy Worker.
-  // If it is denied, fresh installation remains disabled, because an
-  // existing key could not be ruled out.
+  // Inspect TURN without changing keys. A missing list permission blocks
+  // installation, but does not block reuse of a compatible Worker.
   auto client = Client(kApi);
   Json keys;
   auto listed = Decode(client.Get("/client/v4/accounts/" + account +
@@ -460,25 +442,23 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
     }
   }
   review.ok = true;
-  if (health.redesk_health) {
+  if (review.redesk_health) {
     review.explanation = review.update_safe
-        ? "ReDesk Worker is healthy. You can use it or explicitly update the code without resetting Durable Object data."
-        : "ReDesk Worker is healthy. You can use it now. Worker update is unavailable because account-level bindings could not be verified.";
-    if (review.worker_version.empty())
-      review.explanation += " Worker version unavailable (legacy deployment).";
-    else review.explanation += " Deployed version: " + review.worker_version + ".";
-    if (!IsUpdateAvailable(review.worker_version))
-      review.explanation += " The deployed version is already current or newer.";
-    if (!review.turn_keys_checked)
-      review.explanation += " TURN key listing is restricted; existing TURN configuration was not changed.";
-  } else if (worker.worker_exists) {
-    review.explanation = "A Worker exists, but the ReDesk /health check did not pass. It will not be connected or overwritten automatically.";
+        ? "Existing Worker is healthy. You may use or update it after confirmation."
+        : "Existing Worker is healthy. Use Existing is available.";
+    if (!review.worker_version.empty())
+      review.explanation += " Version: " + review.worker_version + ".";
+  } else if (review.worker_exists) {
+    review.explanation = "Worker exists but /health is not compatible. No installation or overwrite is permitted.";
   } else if (!review.turn_keys_checked) {
-    review.explanation = "The Worker could not be verified and TURN keys could not be enumerated. New installation remains disabled.";
+    review.explanation = "No Worker was found, but TURN keys cannot be listed. "
+                         "Installation is blocked until the token can inspect them.";
   } else if (review.existing_turn_key) {
-    review.explanation = "Worker not found, but an existing ReDesk TURN key cannot be recovered. Automatic installation is disabled.";
+    review.explanation = "No Worker was found, but a ReDesk TURN key already exists. "
+                         "Installation is blocked to prevent credential loss.";
   } else {
-    review.explanation = "No compatible ReDesk Worker was detected. New installation remains disabled pending safe TURN credential recovery.";
+    review.explanation = "No Worker or ReDesk TURN key found. "
+                         "Ready to install a new Worker, Durable Object and TURN.";
   }
   return review;
 }
@@ -526,7 +506,7 @@ Result CloudflareProvisioningService::Deploy(
   };
   if (!status.worker_exists) {
     metadata["migrations"] = Json::array({
-      Json{{"tag", "v1"}, {"new_sqlite_classes", Json::array({"SignalHub"})}}
+      Json{{"new_tag", "v1"}, {"new_sqlite_classes", Json::array({"SignalHub"})}}
     });
   } else {
     // Inherit only existing secret bindings; strict mode prevents
