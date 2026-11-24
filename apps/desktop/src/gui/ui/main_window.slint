@@ -3008,7 +3008,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         SettingsGroup {
-                            title: GalleryStrings.texts[116]; rows: 7;
+                            title: GalleryStrings.texts[116]; rows: 6;
                             SettingsToggleRow {
                                 label: GalleryStrings.texts[117];
                                 checked <=> root.ip-direct-enabled-draft;
@@ -3040,30 +3040,18 @@ export component MainWindow inherits Window {
                                     outline-color: UiSurface.separator;
                                 }
                             }
+                            // The unified server picker replaces the legacy self-hosted
+                            // toggle/editor and is the only entry point from Settings.
                             Rectangle {
                                 width: parent.width; height: 72px;
                                 Text {
                                     x: 12px; y: 3px; width: parent.width - 24px; height: 25px;
-                                    text: "Server Configuration"; font-size: 12px;
+                                    text: "Signaling Server"; font-size: 12px;
                                     color: WorkbenchStyle.text; vertical-alignment: center;
                                 }
-                                if root.server-setup-cloudflare-configured: SettingsButton {
-                                    x: 12px; y: 35px;
-                                    width: (parent.width - 36px) / 2; height: 28px;
-                                    text: "Worker Updates";
-                                    enabled: !root.settings-session-active;
-                                    clicked => {
-                                        root.settings-open = false;
-                                        root.server-setup-manage-worker();
-                                    }
-                                }
                                 SettingsButton {
-                                    x: root.server-setup-cloudflare-configured
-                                        ? parent.width / 2 + 6px : 12px;
-                                    y: 35px;
-                                    width: root.server-setup-cloudflare-configured
-                                        ? (parent.width - 36px) / 2 : parent.width - 24px;
-                                    height: 28px;
+                                    x: 12px; y: 35px;
+                                    width: parent.width - 24px; height: 28px;
                                     text: "Change Server";
                                     enabled: !root.settings-session-active;
                                     clicked => {
@@ -3077,22 +3065,6 @@ export component MainWindow inherits Window {
                                     x: 12px; y: parent.height - 1px;
                                     width: parent.width - 24px;
                                     outline-color: UiSurface.separator;
-                                }
-                            }
-                            SettingsToggleRow {
-                                label: UiStrings.self-hosted;
-                                label-reserve: self-host-edit.width + 84px;
-                                checked <=> root.self-hosted-enabled; enabled: !root.settings-session-active; divider: false;
-                                self-host-edit := SettingsButton {
-                                    x: parent.width - self.width - 60px; y: 4px;
-                                    width: self-host-edit-metrics.preferred-width + 24px; height: 28px;
-                                    text: GalleryStrings.texts[118];
-                                    enabled: !root.settings-session-active;
-                                    clicked => { root.self-host-settings-open = true; }
-                                    self-host-edit-metrics := Text {
-                                        visible: false; accessible-role: none;
-                                        text: parent.text; font-size: 12px;
-                                    }
                                 }
                             }
                         }
