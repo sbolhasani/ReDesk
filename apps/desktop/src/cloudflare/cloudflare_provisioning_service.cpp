@@ -508,6 +508,8 @@ Result CloudflareProvisioningService::Deploy(
       return {false, "Worker exists: explicitly confirm Update Worker first"};
     if (!MayUpdateWorker(status))
       return {false, "Worker compatibility/bindings cannot be proven; refusing overwrite"};
+    if (!IsUpdateAvailable(status.worker_version))
+      return {false, "The deployed Worker version is already current or newer. No update was performed."};
   } else if (status.diagnostic != "Worker does not exist") {
     return {false, "Could not safely determine Worker existence: " + status.diagnostic};
   }
