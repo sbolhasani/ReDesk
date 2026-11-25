@@ -127,6 +127,11 @@ if has_config("REDESK_BUILD_HOST") then
     if not is_plat("windows") then raise("ReDesk Host currently targets Windows") end
     if build_desktop then raise("Configure Host with --CROSSDESK_BUILD_DESKTOP=false") end
     add_requires("openssl3 3.3.2", {system = false})
+    if has_config("REDESK_HOST_TRANSPORT_PROBE") then
+        -- Register at project scope before loading the Host targets. Use the
+        -- single-header package because the shared WASAPI TU defines its implementation.
+        add_requires("miniaudio 0.11.21", {system = false, configs = {headeronly = true}})
+    end
     if has_config("REDESK_HOST_TRANSPORT_PROBE") and not build_cli then
         add_requireconfs("**.openssl", "**.openssl3",
             {version = "3.3.2", system = false, override = true})

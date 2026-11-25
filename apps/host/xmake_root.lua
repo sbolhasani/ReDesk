@@ -50,7 +50,6 @@ if has_config("REDESK_HOST_TRANSPORT_PROBE") then
 end
 
 if has_config("REDESK_HOST_TRANSPORT_PROBE") then
-    add_requires("miniaudio 0.11.21")
     target("redesk-host-view-probe")
         set_kind("binary")
         set_default(false)
@@ -59,6 +58,12 @@ if has_config("REDESK_HOST_TRANSPORT_PROBE") then
         add_defines("CROSSDESK_VERSION=\"" .. (get_config("CROSSDESK_VERSION") or "1.7.6") .. "\"")
         add_defines("UNICODE", "_UNICODE", "NOMINMAX", "WIN32_LEAN_AND_MEAN")
         add_packages("openssl3", "nlohmann_json", "spdlog", "libyuv", "miniaudio")
+        before_build(function (target)
+            local pkg = target:pkg("miniaudio")
+            assert(pkg, "miniaudio package missing from Host target; reconfigure xmake")
+            assert(os.isfile(path.join(pkg:installdir(), "include", "miniaudio.h")),
+                "miniaudio.h missing from installed package; reconfigure or reinstall miniaudio")
+        end)
         add_includedirs(path.join(root, "apps/host/core"),
             path.join(root, "apps/host/transport"),
             path.join(root, "apps/host/platform/windows"),
