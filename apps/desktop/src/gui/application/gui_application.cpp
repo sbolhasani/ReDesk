@@ -1671,6 +1671,24 @@ void GuiApplication::ResetSettingsUi(bool gallery_window) {
   main->set_server_setup_provider(static_cast<int32_t>(configured_provider));
   main->set_configured_server_provider(static_cast<int32_t>(configured_provider));
   main->set_configured_server_host(config_center_->GetSignalServerHost().c_str());
+  std::string server_display;
+  if (configured_provider == ConfigCenter::SERVER_PROVIDER::PUBLIC) {
+    // A public selection deliberately retains the previous custom endpoint
+    // in the config for later reuse; do not mislabel it as the active server.
+    server_display = "CrossDesk public signaling service";
+  } else if (configured_provider == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE) {
+    server_display = "https://" + config_center_->GetSignalServerHost();
+    if (server_display.size() >= 7 &&
+        server_display.ends_with("/signal"))
+      server_display.resize(server_display.size() - 7);
+  } else {
+    server_display = config_center_->GetSignalServerHost();
+    const int port = config_center_->GetSignalServerPort();
+    if (port > 0)
+      server_display += ":" + std::to_string(port);
+  }
+  main->set_configured_server_display(server_display.c_str());
+  main->set_configured_server_copied(false);
   main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
   main->set_language_index(language_button_value_);
   main->set_codec_index(video_encode_format_button_value_);
@@ -1901,6 +1919,27 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     // The user explicitly approved disconnecting any active sessions.
     // Tick() performs the normal graceful shutdown and releases the tray.
     exit_ = true;
+  });
+  main->on_copy_configured_server_address([this] {
+    if (!ui_ || config_center_->GetServerProvider() ==
+                    ConfigCenter::SERVER_PROVIDER::PUBLIC)
+      return false;
+    std::string display;
+    const auto provider = config_center_->GetServerProvider();
+    if (provider == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE) {
+      display = "https://" + config_center_->GetSignalServerHost();
+      if (display.ends_with("/signal"))
+        display.resize(display.size() - 7);
+    } else {
+      display = config_center_->GetSignalServerHost();
+      const int port = config_center_->GetSignalServerPort();
+      if (port > 0) display += ":" + std::to_string(port);
+    }
+    if (display.empty() || !SDL_SetClipboardText(display.c_str())) {
+      LOG_WARN("Could not copy configured signaling server to clipboard");
+      return false;
+    }
+    return true;
   });
   main->on_copy_local_id([this] {
     if (!SDL_SetClipboardText(client_id_)) {
