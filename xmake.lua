@@ -115,9 +115,23 @@ option("REDESK_BUILD_HOST")
     set_showmenu(true)
     set_description("Build lightweight Windows Host development targets")
 option_end()
+option("REDESK_HOST_TRANSPORT_PROBE")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Build MiniRTC signaling-only diagnostic for the lightweight host")
+option_end()
+if has_config("REDESK_HOST_TRANSPORT_PROBE") and not has_config("REDESK_BUILD_HOST") then
+    raise("REDESK_HOST_TRANSPORT_PROBE requires REDESK_BUILD_HOST")
+end
 if has_config("REDESK_BUILD_HOST") then
     if not is_plat("windows") then raise("ReDesk Host currently targets Windows") end
     if build_desktop then raise("Configure Host with --CROSSDESK_BUILD_DESKTOP=false") end
     add_requires("openssl3 3.3.2", {system = false})
+    if has_config("REDESK_HOST_TRANSPORT_PROBE") and not build_cli then
+        add_requireconfs("**.openssl", "**.openssl3",
+            {version = "3.3.2", system = false, override = true})
+        includes(path.join(source_dir, "deps/thirdparty/openssl"))
+        includes(path.join(source_dir, "deps/submodules/minirtc"))
+    end
     includes(path.join(source_dir, "apps/host/xmake_root.lua"))
 end
