@@ -27,11 +27,13 @@ public:
     ~SignalPeer();
     // Before start(), restrict a temporary registration to a specific desktop
     // viewer identity. Only one join is accepted in this peer's lifetime.
-    void enable_view_probe(std::string viewer_id, bool allow_input = false, bool allow_clipboard = false);
+    void enable_view_probe(std::string viewer_id, bool allow_input = false, bool allow_clipboard = false, bool allow_audio = false);
     struct InputMessage { std::string stream, payload; };
     std::vector<InputMessage> take_input();
     std::optional<std::string> take_clipboard();
     bool send_clipboard(const std::string& text);
+    bool audio_requested() const;
+    bool send_audio(const char* data, std::size_t size);
     std::string take_registration_password();
     bool approve_viewer();
     bool send_host_info(const std::string& message);
@@ -65,6 +67,8 @@ private:
     bool allow_input_ = false;
     std::deque<InputMessage> input_;
     bool allow_clipboard_ = false;
+    bool allow_audio_ = false;
+    bool audio_requested_ = false;
     std::optional<std::string> clipboard_;
 };
 }

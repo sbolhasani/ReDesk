@@ -189,14 +189,16 @@ void SignalPeer::net_status(const char*, size_t, MiniRtcTraversalMode, const Min
                              const char*, size_t, void*) noexcept {
     // The initial report may carry ID@password. Do not log or expose it.
 }
-void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input, bool allow_clipboard) {
+void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input, bool allow_clipboard, bool allow_audio) {
     if (started_ || !login_id_.empty() || viewer_id.rfind("C-",0) != 0 ||
         viewer_id.size() <= 2 || !valid_id(std::string_view(viewer_id).substr(2)))
         throw std::invalid_argument("Expected C-<viewer numeric ID> for a fresh test registration");
     expected_viewer_ = std::move(viewer_id);
     allow_input_ = allow_input;
     allow_clipboard_ = allow_input && allow_clipboard;
-    if (allow_input_) params_.on_receive_data_buffer = receive_input;
+    allow_audio_ = allow_audio;
+    audio_requested_ = allow_audio;
+    if (allow_input_ || allow_audio_) params_.on_receive_data_buffer = receive_input;
 }
 std::string SignalPeer::take_registration_password() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -236,10 +238,22 @@ void SignalPeer::receive_input(const char* data, size_t size, const char* id, si
             std::string_view(id,id_size) != self.expected_viewer_) return;
         const std::string_view stream(source, source_size);
         const bool clip = stream == crossdesk::kClipboardStream;
-        if (!clip && (size > 32768 || (stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream))) return;
+        const bool audio_control = stream == crossdesk::kControlStream;
+        if (!clip && (size > 32768 || (!audio_control && stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream))) return;
         std::lock_guard<std::mutex> lock(self.mutex_);
-        if (!self.allow_input_ || !self.approved_ || self.status_.revoked ||
+        if (!self.approved_ || self.status_.revoked ||
             !self.status_.viewer_connected || self.status_.state != MiniRtcSignalConnected) return;
+        if (audio_control) {
+            // Only the existing audio_capture boolean is actionable here.
+            // No automation, restart, file or other control RPC is accepted.
+            if (!self.allow_audio_ || size > 1024) return;
+            const auto msg = nlohmann::json::parse(data,data+size,nullptr,false);
+            if (msg.is_object() && msg.contains("type") && msg["type"] == 2 &&
+                msg.contains("audio_capture") && msg["audio_capture"].is_boolean())
+                self.audio_requested_ = msg["audio_capture"].get<bool>();
+            return;
+        }
+        if (!self.allow_input_) return;
         if (clip) {
             if (self.allow_clipboard_ && !std::memchr(data, '\0', size))
                 self.clipboard_ = std::string(data, size);
@@ -286,5 +300,20 @@ bool SignalPeer::send_clipboard(const std::string& text) {
         text.size() > crossdesk::kMaxClipboardBytes || text.find('\0') != std::string::npos) return false;
     return MiniRtcSendReliableDataFrameToPeer(peer_, text.data(), text.size(),
         crossdesk::kClipboardStream, expected_viewer_.data(), expected_viewer_.size()) == 0;
+}
+bool SignalPeer::audio_requested() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allow_audio_ && audio_requested_ && approved_ && !status_.revoked &&
+           status_.viewer_connected && status_.state == MiniRtcSignalConnected;
+}
+bool SignalPeer::send_audio(const char* data, std::size_t size) {
+    if (!peer_ || !audio_requested() || !data || size != 960) return false;
+    MiniRtcAudioFrame frame{};
+    frame.data = data;
+    frame.size = size;
+    const auto now = MiniRtcGetSystemTimeMicros(peer_);
+    frame.captured_timestamp = now > 0 ? static_cast<uint64_t>(now) : 0;
+    return MiniRtcSendAudioFrameToPeer(peer_, &frame, crossdesk::kAudioStream,
+        expected_viewer_.data(), expected_viewer_.size()) == 0;
 }
 }

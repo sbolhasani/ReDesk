@@ -2,6 +2,7 @@
 #include "capture_source.h"
 #include "input_probe_controller.h"
 #include "clipboard_probe.h"
+#include "audio_probe.h"
 #include "interactive_desktop.h"
 #include <memory>
 #include <string_view>
@@ -17,10 +18,17 @@ using namespace redesk::host;
 using namespace redesk::host::windows;
 using namespace std::chrono_literals;
 int main(int argc, char** argv) {
-    const bool control = argc >= 4 && std::string_view(argv[3]) == "--control";
-    const bool clipboard = argc == 5 && control && std::string_view(argv[4]) == "--clipboard";
-    if (argc != 3 && !(argc == 4 && control) && !clipboard) {
-        std::cout << "Usage: redesk-host-view-probe wss://server/signal VIEWER_NUMERIC_ID [--control [--clipboard]]\n"
+    bool control=false, clipboard=false, audio=false;
+    bool valid=argc>=3;
+    for(int i=3;i<argc;++i) {
+        const std::string_view flag(argv[i]);
+        if(flag=="--control" && !control) control=true;
+        else if(flag=="--clipboard" && !clipboard) clipboard=true;
+        else if(flag=="--audio" && !audio) audio=true;
+        else valid=false;
+    }
+    if (!valid || (clipboard && !control)) {
+        std::cout << "Usage: redesk-host-view-probe wss://server/signal VIEWER_NUMERIC_ID [--control] [--clipboard] [--audio]\n"
                      "Temporary registration, one approved viewer, primary display only.\n";
         return argc == 1 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -35,7 +43,7 @@ int main(int argc, char** argv) {
         capture.initialize(15);
         SignalPeer peer(argv[1], "", "", DeviceKey::generate());
         const std::string viewer = std::string("C-") + argv[2];
-        peer.enable_view_probe(viewer,control,clipboard);
+        peer.enable_view_probe(viewer,control,clipboard,audio);
         peer.start();
         auto deadline = std::chrono::steady_clock::now() + 30s;
         while (peer.status().state != MiniRtcSignalConnected &&
@@ -65,7 +73,7 @@ int main(int argc, char** argv) {
             std::cerr << "Viewer not connected or admission revoked\n";
             return EXIT_FAILURE;
         }
-        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to 60 seconds?" : " to view the primary monitor for up to 60 seconds? No remote control.") + (clipboard ? "\nClipboard text will be shared in both directions after approval." : "");
+        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to 60 seconds?" : " to view the primary monitor for up to 60 seconds? No remote control.") + (clipboard ? "\nClipboard text will be shared in both directions after approval." : "") + (audio ? "\nSystem playback audio will be shared after approval (not microphone)." : "");
         if (MessageBoxA(nullptr, prompt.c_str(), "ReDesk Host - view test",
             MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES ||
             !peer.approve_viewer()) return EXIT_FAILURE;
@@ -93,6 +101,10 @@ int main(int argc, char** argv) {
         if (control) input = std::make_unique<InputProbeController>(d);
         std::unique_ptr<ClipboardProbe> clip;
         if (clipboard) clip = std::make_unique<ClipboardProbe>();
+        std::unique_ptr<AudioProbe> sound;
+        if (audio) sound=std::make_unique<AudioProbe>();
+        std::uint64_t audio_packets=0;
+        bool audio_running_seen=false;
         capture.start();
         std::cout << (control ? "View and control enabled. " : "View-only. ")
                   << "Press Esc to stop; timeout 60 seconds.\n";
@@ -116,6 +128,15 @@ int main(int argc, char** argv) {
                     crossdesk::IsCurrentSessionUserDesktopActive(); },
                     [&](const std::string& value) { return peer.send_clipboard(value); });
             }
+            if (sound) {
+                sound->set_enabled(peer.audio_requested());
+                audio_running_seen |= sound->running();
+                for (const auto& packet:sound->take()) {
+                    if (!peer.audio_requested() ||
+                        !crossdesk::IsCurrentSessionUserDesktopActive()) break;
+                    if (peer.send_audio(packet.pcm.data(),packet.pcm.size())) ++audio_packets;
+                }
+            }
             auto latest = capture.latest();
             if (latest.pixels && latest.stream == "Display1" && latest.sequence != last) {
                 last = latest.sequence;
@@ -129,6 +150,7 @@ int main(int argc, char** argv) {
             }
             std::this_thread::sleep_for(15ms);
         }
+        if (sound) sound->set_enabled(false);
         capture.stop();
         peer.stop();
         bool released = true;
@@ -142,7 +164,11 @@ int main(int argc, char** argv) {
             else std::cout << "Remote input cleanup passed (native release calls accepted)\n";
         }
         std::cout << "Frames submitted (not delivery confirmation): " << frames << "\n";
-        return frames && released ? EXIT_SUCCESS : EXIT_FAILURE;
+        if (audio) {
+            std::cout << "Audio capture started: " << (audio_running_seen ? "yes" : "no")
+                      << "\nAudio packets submitted (not delivery confirmation): " << audio_packets << "\n";
+        }
+        return frames && released && (!audio || (audio_running_seen && audio_packets)) ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception&) {
         std::cerr << "View probe failed\n";
         return EXIT_FAILURE;
