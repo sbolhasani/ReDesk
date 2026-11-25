@@ -2320,6 +2320,11 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       return;
     }
     if (action == 0) {
+      if (HasActiveSession()) {
+        main->set_server_setup_error(
+            "Disconnect incoming and outgoing sessions before changing the signaling server.");
+        return;
+      }
       if (!review.worker_exists || !review.redesk_health) {
         main->set_server_setup_error("Existing Worker health has not been verified.");
         return;
@@ -5771,14 +5776,9 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
         "无法读取设备身份或可信列表，请修复后再启用。", localization_language_index_)));
     return false;
   }
-  const bool has_endpoint = main->get_self_hosted_enabled() ||
-      !std::string(main->get_server_host()).empty() ||
-      !std::string(main->get_server_port()).empty();
-  if (has_endpoint && !ValidateSelfHostedSettingsFromUi(gallery_window)) {
-    main->set_settings_tab(0);
-    main->set_self_host_settings_open(true);
-    return false;
-  }
+  // The standalone Change Server flow exclusively owns signaling endpoints.
+  // Never validate or rewrite a stale legacy self-hosted draft when saving
+  // unrelated settings (privacy, language, LAN, etc.).
   const auto wall_settings = gallery::StreamSettings::FromIndices(
       main->get_gallery_resolution_draft(), main->get_gallery_frame_rate_draft(),
       main->get_gallery_bandwidth_draft());
@@ -5794,17 +5794,6 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
     main->set_gallery_settings_error(UiText(
         localization::Literal("保存失败，请重试", localization_language_index_)));
     main->set_settings_tab(1);
-    return false;
-  }
-  if ((has_endpoint && config_center_->SetServerEndpoint(
-          std::string(main->get_server_host()), *ParsePort(main->get_server_port())) != 0) ||
-      config_center_->SetSelfHosted(main->get_self_hosted_enabled()) != 0) {
-    if (wall_changed && !ui_->gallery.Save(ui_->gallery_path))
-      LOG_ERROR("Failed to restore DeskHub settings after common save failure");
-    main->set_self_host_settings_error(UiText(
-        localization::self_hosted_save_failed[localization_language_index_]));
-    main->set_settings_tab(0);
-    main->set_self_host_settings_open(true);
     return false;
   }
   if (config_center_->SetIpDirectEnabled(main->get_ip_direct_enabled_draft()) != 0) {
@@ -5865,7 +5854,7 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
   language_button_value_ =
       std::clamp(main->get_language_index(), 0, localization::kSystemLanguage);
   video_encode_format_button_value_ = std::clamp(main->get_codec_index(), 0, 1);
-  enable_self_hosted_ = main->get_self_hosted_enabled();
+  enable_self_hosted_ = config_center_->IsSelfHosted();
 #if !defined(__OHOS__)
   enable_autostart_ = main->get_autostart_enabled();
 #endif
