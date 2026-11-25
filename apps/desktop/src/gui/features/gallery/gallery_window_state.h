@@ -19,7 +19,7 @@ struct WindowState {
   bool wall_fullscreen = false;
   bool wall_maximized = false;
   // Store client dimensions in logical pixels, independent of the display DPI.
-  std::optional<slint::LogicalSize> wall_size;
+  std::optional<slint::LogicalSize> wall_size, connection_size;
   std::optional<slint::PhysicalPosition> wall_position, connection_position;
 
   void Observe(bool wall, slint::PhysicalPosition position,
@@ -29,6 +29,12 @@ struct WindowState {
     if (Restoring())
       return;
     if (!wall) {
+      if (fullscreen || maximized ||
+          IsUndersized(size, scale, compact_height, compact_width))
+        return;
+      scale = std::max(scale, 1.0f);
+      connection_size = slint::LogicalSize(
+          slint::Size<float>{size.width / scale, size.height / scale});
       connection_position = position;
       return;
     }
@@ -55,13 +61,9 @@ struct WindowState {
     if (Restoring() || !visible || minimized || fullscreen || maximized ||
         size.width == 0 || size.height == 0)
       return false;
-    // Display mode/DPI changes can enlarge the fixed connection window as
-    // well as shrink it. Restore both directions at the current scale; the
-    // resizable gallery only needs recovery below its minimum dimensions.
-    const bool mismatch =
-        wall ? IsUndersized(size, scale, compact_height, compact_width)
-             : !SameSize(size, RestoreSize(false, scale, compact_height,
-                                          compact_width));
+    // Both the gallery and connection window are resizable. Only recover
+    // invalid dimensions below their minimum, not deliberate user resizing.
+    const bool mismatch = IsUndersized(size, scale, compact_height, compact_width);
     if (!mismatch)
       return false;
     if (wall) {
@@ -79,12 +81,11 @@ struct WindowState {
   slint::PhysicalSize RestoreSize(bool wall, float scale,
                                   float compact_height = 486,
                                   float compact_width = 640) const {
-    const float width =
-        wall && wall_size ? std::max(compact_width, wall_size->width)
-                          : compact_width;
-    const float height = wall && wall_size
-                             ? std::max(compact_height, wall_size->height)
-                             : compact_height;
+    const auto& saved_size = wall ? wall_size : connection_size;
+    const float width = saved_size
+        ? std::max(compact_width, saved_size->width) : compact_width;
+    const float height = saved_size
+        ? std::max(compact_height, saved_size->height) : compact_height;
     scale = std::max(scale, 1.0f);
     return slint::PhysicalSize(
         slint::Size<uint32_t>{uint32_t(std::lround(width * scale)),
