@@ -39,47 +39,26 @@ bool GuiRuntime::HasActiveSession() {
 
 void GuiRuntime::MuteRemoteAudio(const std::shared_ptr<RemoteSession>& props) {
   if (!props) return;
-  {
-    std::lock_guard delivery_lock(audio_delivery_mutex_);
-    props->audio_capture_button_pressed_ = false;
-    props->audio_allowed_ = false;
-    devices_.ClearAudio(props->remote_id_);
-    props->preview_needs_sync_ = true;
-  }
-  // Negotiated hosts already receive demand through preview subscriptions.
-  // Legacy hosts need the explicit command in addition to local playback mute.
-  if (!props->closing_ && props->peer_ &&
-      props->connection_status_.load() == MiniRtcConnectionStatus::MiniRtcConnectionConnected &&
-      !props->preview_subscription_supported_) {
-    RemoteAction action{};
-    action.type = ControlType::audio_capture;
-    action.a = false;
-    const auto message = action.to_json();
-    const auto wire_id = props->peer_events_ ?
-        props->peer_events_->WireId(props->remote_id_) : props->remote_id_;
-    const int ret = MiniRtcSendReliableDataFrameToPeer(props->peer_,
-        message.data(), message.size(), props->control_data_label_.c_str(),
-        wire_id.data(), wire_id.size());
-    LOG_INFO("Viewer audio command: mute, submit_result={}", ret);
-  }
+  std::lock_guard delivery_lock(audio_delivery_mutex_);
+  props->audio_capture_button_pressed_ = false;
+  props->audio_allowed_ = false;
+  devices_.ClearAudio(props->remote_id_);
+  // Capable peers stop sending to this controller on the next subscription;
+  // old peers remain muted by the local receive gate above.
+  props->preview_needs_sync_ = true;
 }
 
 void GuiRuntime::UnmuteRemoteAudio(const std::shared_ptr<RemoteSession>& props) {
   if (!props || props->closing_) return;
   props->audio_capture_button_pressed_ = true;
   props->preview_needs_sync_ = true;
-  // Retain existing resume behavior for negotiated hosts.
-  if (!props->peer_) return;
+  // Also resume capture on old peers, or after a legacy controller stopped it.
   RemoteAction action{};
   action.type = ControlType::audio_capture;
   action.a = true;
   const auto message = action.to_json();
-  const auto wire_id = props->peer_events_ ?
-      props->peer_events_->WireId(props->remote_id_) : props->remote_id_;
-  const int ret = MiniRtcSendReliableDataFrameToPeer(props->peer_,
-      message.data(), message.size(), props->control_data_label_.c_str(),
-      wire_id.data(), wire_id.size());
-  LOG_INFO("Viewer audio command: unmute, submit_result={}", ret);
+  MiniRtcSendReliableDataFrame(props->peer_, message.data(), message.size(),
+                        props->control_data_label_.c_str());
 }
 
 void GuiRuntime::HandleConnectionStatusChange() {

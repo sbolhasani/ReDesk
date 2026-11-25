@@ -3039,8 +3039,6 @@ void GuiApplication::BindStreamCallbacks() {
     if (!props || !props->connection_established_) {
       return;
     }
-    LOG_INFO("Viewer audio toggle: requested={}",
-             props->audio_capture_button_pressed_ ? "mute" : "unmute");
     if (props->audio_capture_button_pressed_)
       MuteRemoteAudio(props);
     else
