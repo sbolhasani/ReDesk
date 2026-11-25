@@ -107,3 +107,17 @@ if build_cli then
     end
     includes(path.join(source_dir, "apps/cli/xmake.lua"))
 end
+
+-- Host-specific checks: deliberately do not include the desktop dependency
+-- graph or build a remotely accessible executable before admission is wired.
+option("REDESK_BUILD_HOST")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Build lightweight Windows Host development targets")
+option_end()
+if has_config("REDESK_BUILD_HOST") then
+    if not is_plat("windows") then raise("ReDesk Host currently targets Windows") end
+    if build_desktop then raise("Configure Host with --CROSSDESK_BUILD_DESKTOP=false") end
+    add_requires("openssl3 3.3.2", {system = false})
+    includes(path.join(source_dir, "apps/host/xmake_root.lua"))
+end
