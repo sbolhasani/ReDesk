@@ -1023,6 +1023,7 @@ struct GuiApplication::SlintUi {
     bool health_retry = false;
     bool worker_version_probe = false;
     bool turn_recovery_completion = false;
+    bool setup_retry_attempt = false;
     // 0 = no setup completion, 1 = install, 2 = TURN recovery, 3 = update.
     int setup_completion_kind = 0;
     std::string discovered_account_id;
@@ -2174,6 +2175,69 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       main->set_server_setup_error("Review has expired. Validate the token again.");
       return;
     }
+    if (action == 3) {
+      // Retry is an independent read-only preflight followed by the safe
+      // new-install/recovery path. Never re-use a stale review to mutate
+      // Cloudflare or create duplicate TURN keys.
+      if (!main->get_server_setup_retry_available() || HasActiveSession()) {
+        main->set_server_setup_error(
+            "Retry is unavailable while a session is active or no setup failed.");
+        return;
+      }
+      const std::string token = ui_->server_setup_pending_token;
+      main->set_server_setup_busy(true);
+      main->set_server_setup_error("");
+      main->set_server_setup_status(
+          "Rechecking Worker, TURN keys and encrypted recovery before retry...");
+      ui_->server_setup_gallery_window = main->get_gallery_mode();
+      ui_->server_setup_future = std::async(std::launch::async,
+          [token, review] {
+        cloudflare::CloudflareProvisioningService service;
+        SlintUi::ServerSetupResult result;
+        result.setup_retry_attempt = true;
+        const auto refreshed = service.ReviewAccount(
+            token, review.account_id, review.worker_url);
+        if (!refreshed.ok) {
+          result.message = "Retry preflight failed: " + refreshed.explanation;
+          return result;
+        }
+        if (refreshed.worker_exists && refreshed.redesk_health &&
+            refreshed.turn_configured) {
+          // A previous operation may have completed on Cloudflare even when
+          // the final health request failed locally.
+          result.ok = cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+              refreshed.worker_url, nullptr, &result.endpoint);
+          result.setup_completion_kind = 2;
+          if (!result.ok) result.message = "Verified Worker has an invalid URL";
+          return result;
+        }
+        const bool fresh_install = !refreshed.worker_exists &&
+            refreshed.turn_keys_checked && !refreshed.existing_turn_key;
+        const bool pending_recovery = refreshed.pending_turn_recovery;
+        if (!fresh_install && !pending_recovery) {
+          result.message = "Retry cannot safely continue: " +
+              refreshed.explanation +
+              " No Worker, Durable Object or TURN key was overwritten. "
+              "Check the Worker URL or token permissions before retrying.";
+          return result;
+        }
+        std::string url = refreshed.worker_url;
+        const auto installed = service.ProvisionNew(
+            token, refreshed.account_id,
+            cloudflare::kReDeskSignalingWorker, &url);
+        result.ok = installed.ok;
+        result.message = installed.error;
+        result.setup_completion_kind = pending_recovery ? 2 : 1;
+        if (result.ok &&
+            !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+                url, nullptr, &result.endpoint)) {
+          result.ok = false;
+          result.message = "Invalid Worker URL returned after retry";
+        }
+        return result;
+      });
+      return;
+    }
     if (action == 0) {
       if (!review.worker_exists || !review.redesk_health) {
         main->set_server_setup_error("Existing Worker health has not been verified.");
@@ -2218,7 +2282,9 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       return;
     }
     const std::string token = ui_->server_setup_pending_token;
-    ui_->server_setup_pending_token.clear();
+    // Keep the token and verified account in memory for Retry Setup.
+    // They are cleared only on Finish, Cancel, or a successful completion.
+    main->set_server_setup_retry_available(false);
     main->set_server_setup_busy(true);
     main->set_server_setup_status(action == 1
         ? "Installing Cloudflare Worker and TURN..."
@@ -3045,6 +3111,7 @@ void GuiApplication::Tick() {
           std::string(window->get_server_setup_host()).empty())
         window->set_server_setup_host(result.suggested_worker_url.c_str());
       if (result.review_ready) {
+        window->set_server_setup_retry_available(false);
         ui_->server_setup_pending_token =
             std::string(window->get_server_setup_token());
         ui_->server_setup_review = result.review;
@@ -3083,6 +3150,7 @@ void GuiApplication::Tick() {
       window->set_server_setup_error(result.ok ? "" : result.message.c_str());
       window->set_server_setup_status(result.ok ? "Cloudflare API token is active." : "");
     } else if (result.review_ready) {
+      window->set_server_setup_retry_available(false);
       ui_->server_setup_review = result.review;
       window->set_server_setup_deployed_version(
           result.review.worker_version.empty()
@@ -3105,16 +3173,21 @@ void GuiApplication::Tick() {
       window->set_server_setup_confirm_update(false);
       window->set_server_setup_error("");
     } else if (!result.ok) {
-      // A failed Finish must preserve the token and Account ID so the user
-      // can fix permissions or the Worker URL and retry without pasting again.
-      ui_->server_setup_pending_token.clear();
-      ui_->server_setup_review = {};
+      // Retain the verified in-memory token, account and review so Retry Setup
+      // can safely re-inspect Cloudflare without requiring the user to start over.
+      window->set_server_setup_retry_available(
+          (result.setup_completion_kind != 0 || result.setup_retry_attempt) &&
+          !ui_->server_setup_pending_token.empty() &&
+          ui_->server_setup_review.ok);
       window->set_server_setup_error(result.message.c_str());
     } else if (config_center_->SelectServer(
             ConfigCenter::SERVER_PROVIDER::CLOUDFLARE,
             result.endpoint, 443) != 0) {
-      window->set_server_setup_error("Could not save Cloudflare server configuration.");
+      window->set_server_setup_retry_available(
+          !ui_->server_setup_pending_token.empty() && ui_->server_setup_review.ok);
+      window->set_server_setup_error("Cloudflare setup succeeded but saving the server configuration failed. Retry Setup will recheck the backend.");
     } else {
+      window->set_server_setup_retry_available(false);
       const std::string completed_worker_url = ui_->server_setup_review.worker_url;
       ui_->server_setup_pending_token.clear();
       ui_->server_setup_review = {};
