@@ -2207,7 +2207,8 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
           // the final health request failed locally.
           result.ok = cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
               refreshed.worker_url, nullptr, &result.endpoint);
-          result.setup_completion_kind = 2;
+          // A previously completed first-time install is not a TURN recovery.
+          result.setup_completion_kind = review.pending_turn_recovery ? 2 : 1;
           if (!result.ok) result.message = "Verified Worker has an invalid URL";
           return result;
         }
