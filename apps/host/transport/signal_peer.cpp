@@ -255,20 +255,13 @@ void SignalPeer::receive_input(const char* data, size_t size, const char* id, si
         if (!self.approved_ || self.status_.revoked ||
             !self.status_.viewer_connected || self.status_.state != MiniRtcSignalConnected) return;
         if (audio_control) {
-            // Only audio demand from existing wire messages is actionable here.
-            // No automation, restart, file or other control RPC is accepted.
+            // This probe advertises no preview negotiation. Only the legacy
+            // audio_capture command is actionable; ignore preview subscriptions.
             if (!self.allow_audio_ || size > 1024) return;
             const auto msg = nlohmann::json::parse(data,data+size,nullptr,false);
-            if (const auto request = crossdesk::PreviewSubscription::Parse(msg)) {
-                if (!self.preview_audio_ || request->IsNewerThan(*self.preview_audio_)) {
-                    self.preview_audio_ = *request;
-                    self.audio_requested_ = request->audio;
-                }
-            } else if (!self.preview_audio_ && msg.is_object() &&
-                       msg.contains("type") && msg["type"] == 2 &&
-                       msg.contains("audio_capture") && msg["audio_capture"].is_boolean()) {
+            if (msg.is_object() && msg.contains("type") && msg["type"] == 2 &&
+                msg.contains("audio_capture") && msg["audio_capture"].is_boolean())
                 self.audio_requested_ = msg["audio_capture"].get<bool>();
-            }
             return;
         }
         if (!self.allow_input_) return;
@@ -333,15 +326,6 @@ bool SignalPeer::send_audio(const char* data, std::size_t size) {
     frame.captured_timestamp = now > 0 ? static_cast<uint64_t>(now) : 0;
     return MiniRtcSendAudioFrameToPeer(peer_, &frame, crossdesk::kAudioStream,
         expected_viewer_.data(), expected_viewer_.size()) == 0;
-}
-bool SignalPeer::sync_audio_state() {
-    if (!peer_ || !view_active() || !allow_audio_) return false;
-    const bool desired = audio_requested();
-    if (applied_audio_ && *applied_audio_ == desired) return true;
-    if (MiniRtcSetAudioSendPaused(peer_, expected_viewer_.data(),
-                                  expected_viewer_.size(), !desired) != 0) return false;
-    applied_audio_ = desired;
-    return true;
 }
 bool SignalPeer::request_test_password(const std::string& password) {
     if (!peer_ || expected_viewer_.empty() || !login_id_.empty() ||

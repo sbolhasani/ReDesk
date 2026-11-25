@@ -137,6 +137,9 @@ int main(int argc, char** argv) {
         std::uint64_t audio_packets=0;
         bool audio_running_seen=false;
         std::optional<bool> last_audio;
+        std::optional<bool> last_audio_running;
+        auto next_audio_report=std::chrono::steady_clock::now();
+        std::uint64_t audio_submitted_at_report=0;
         capture.start();
         std::cout << (control ? "View and control enabled. " : "View-only. ")
                   << "Press Esc to stop; timeout 15 minutes.\n";
@@ -162,17 +165,31 @@ int main(int argc, char** argv) {
             }
             if (sound) {
                 const bool requested=peer.audio_requested();
-                const bool synced=peer.sync_audio_state();
-                sound->set_enabled(requested && synced);
+                // Keep the previously verified PCM submission path. Mute
+                // stops capture and clears its bounded queue, independently
+                // of optional transport pause APIs.
+                sound->set_enabled(requested);
                 if (!last_audio || *last_audio != requested) {
                     std::cout << "Viewer audio: " << (requested ? "enabled" : "muted") << "\n";
                     last_audio=requested;
                 }
-                audio_running_seen |= sound->running();
+                const bool running=sound->running();
+                audio_running_seen |= running;
+                if (!last_audio_running || *last_audio_running!=running) {
+                    std::cout << "Audio capture: " << (running ? "running" : "stopped") << std::endl;
+                    last_audio_running=running;
+                }
                 for (const auto& packet:sound->take()) {
                     if (!peer.audio_requested() ||
                         !crossdesk::IsCurrentSessionUserDesktopActive()) break;
                     if (peer.send_audio(packet.pcm.data(),packet.pcm.size())) ++audio_packets;
+                }
+                const auto now=std::chrono::steady_clock::now();
+                if (now>=next_audio_report) {
+                    std::cout << "Audio packets submitted since last report: "
+                              << audio_packets-audio_submitted_at_report << std::endl;
+                    audio_submitted_at_report=audio_packets;
+                    next_audio_report=now+5s;
                 }
             }
             auto latest = capture.latest();
