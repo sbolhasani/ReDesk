@@ -1023,6 +1023,8 @@ struct GuiApplication::SlintUi {
     bool health_retry = false;
     bool worker_version_probe = false;
     bool turn_recovery_completion = false;
+    // 0 = no setup completion, 1 = install, 2 = TURN recovery, 3 = update.
+    int setup_completion_kind = 0;
     std::string discovered_account_id;
     std::string suggested_worker_url;
     // Used only for discarding stale read-only fetch responses when the user
@@ -2189,7 +2191,9 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       ui_->server_setup_review = {};
       main->set_server_setup_cloudflare_configured(true);
       main->set_server_setup_review_open(false);
-      main->set_server_setup_open(false);
+      main->set_server_setup_success_url(review.worker_url.c_str());
+      main->set_server_setup_success_kind(4);
+      main->set_server_setup_error("");
       main->set_server_setup_status("");
       ApplySettingsFromConfig(true);
       return;
@@ -2248,6 +2252,8 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       response.endpoint = std::move(endpoint);
       response.message = result.error;
       response.turn_recovery_completion = action == 1 && review.pending_turn_recovery;
+      response.setup_completion_kind = action == 2 ? 3 :
+          (review.pending_turn_recovery ? 2 : 1);
       return response;
     });
   });
@@ -3115,16 +3121,18 @@ void GuiApplication::Tick() {
       window->set_server_setup_review_open(false);
       window->set_server_setup_cloudflare_configured(true);
       window->set_server_setup_deployed_version(cloudflare::kReDeskWorkerVersion);
-      if (result.turn_recovery_completion) {
-        // Recovery is distinct from initial setup: keep the wizard open so
-        // the user can see that TURN secrets have been restored successfully.
-        window->set_server_setup_page(1);
-        window->set_server_setup_status(
-            "TURN recovery completed. Worker and TURN are healthy. "
-            "You can now close this window.");
-      } else {
-        window->set_server_setup_open(false);
+      window->set_server_setup_page(1);
+      window->set_server_setup_error("");
+      window->set_server_setup_status("");
+      // Keep the setup window visible until the user explicitly selects Finish.
+      // Do not confuse successful API deployment with post-update health:
+      // those have distinct completion text in the UI.
+      std::string success_url = ui_->server_setup_review.worker_url;
+      if (success_url.empty() && !result.endpoint.empty()) {
+        success_url = "https://" + result.endpoint;
       }
+      window->set_server_setup_success_url(success_url.c_str());
+      window->set_server_setup_success_kind(result.setup_completion_kind);
       ApplySettingsFromConfig(true);
     }
     }
