@@ -1022,6 +1022,7 @@ struct GuiApplication::SlintUi {
     bool discovery_attempt = false;
     bool health_retry = false;
     bool worker_version_probe = false;
+    bool turn_recovery_completion = false;
     std::string discovered_account_id;
     std::string suggested_worker_url;
     // Used only for discarding stale read-only fetch responses when the user
@@ -2233,8 +2234,12 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
               url, nullptr, &endpoint)) {
         result = {false, "Invalid Worker URL after deployment"};
       }
-      return SlintUi::ServerSetupResult{result.ok, false,
-                                        std::move(endpoint), result.error};
+      SlintUi::ServerSetupResult response;
+      response.ok = result.ok;
+      response.endpoint = std::move(endpoint);
+      response.message = result.error;
+      response.turn_recovery_completion = action == 1 && review.pending_turn_recovery;
+      return response;
     });
   });
   main->on_server_setup_create_token([this] {
@@ -3101,7 +3106,16 @@ void GuiApplication::Tick() {
       window->set_server_setup_review_open(false);
       window->set_server_setup_cloudflare_configured(true);
       window->set_server_setup_deployed_version(cloudflare::kReDeskWorkerVersion);
-      window->set_server_setup_open(false);
+      if (result.turn_recovery_completion) {
+        // Recovery is distinct from initial setup: keep the wizard open so
+        // the user can see that TURN secrets have been restored successfully.
+        window->set_server_setup_page(1);
+        window->set_server_setup_status(
+            "TURN recovery completed. Worker and TURN are healthy. "
+            "You can now close this window.");
+      } else {
+        window->set_server_setup_open(false);
+      }
       ApplySettingsFromConfig(true);
     }
     }
