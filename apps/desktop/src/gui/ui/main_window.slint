@@ -810,6 +810,9 @@ export component MainWindow inherits Window {
     in-out property <string> server-setup-bundled-version: "1.0.0";
     callback server-setup-manage-worker();
     in-out property <bool> server-setup-review-open: false;
+    // 0 = normal, 1 = installed, 2 = resumed TURN, 3 = updated, 4 = existing.
+    in-out property <int> server-setup-success-kind: 0;
+    in-out property <string> server-setup-success-url: "";
     in property <string> server-setup-review-description: "";
     in property <string> server-setup-review-url: "";
     in property <bool> server-setup-review-existing: false;
@@ -3077,6 +3080,8 @@ export component MainWindow inherits Window {
                                         root.settings-open = false;
                                         root.server-setup-postconnect = false;
                                         root.server-setup-switch-confirm = false;
+                                        root.server-setup-success-kind = 0;
+                                        root.server-setup-success-url = "";
                                         root.server-setup-open = true;
                                         root.server-setup-page = 0;
                                     }
@@ -3989,7 +3994,8 @@ export component MainWindow inherits Window {
             TouchArea { scroll-event(event) => { accept } }
             Text {
                 x: 22px; y: 20px; width: parent.width - 44px; height: 30px;
-                text: root.server-setup-review-open ? "Review Cloudflare Backend"
+                text: root.server-setup-success-kind != 0 ? "Cloudflare Backend Ready"
+                    : root.server-setup-review-open ? "Review Cloudflare Backend"
                     : root.server-setup-page == 0 ? "1. Choose a server"
                     : root.server-setup-provider == 1 ? "2. Connect Cloudflare"
                     : "2. Configure server";
@@ -3997,7 +4003,9 @@ export component MainWindow inherits Window {
             }
             Text {
                 x: 22px; y: 56px; width: parent.width - 44px; height: 42px;
-                text: root.server-setup-review-open
+                text: root.server-setup-success-kind != 0
+                    ? "The operation succeeded. Review the result and select Finish."
+                    : root.server-setup-review-open
                     ? "3. Review backend components and confirm the requested operation."
                     : root.server-setup-page == 0
                     ? "Select a signaling provider. Your device identity is preserved."
@@ -4012,7 +4020,48 @@ export component MainWindow inherits Window {
                     + "    Bundled: " + root.server-setup-bundled-version;
                 color: WorkbenchStyle.muted; font-size: 11px;
             }
-            if root.server-setup-review-open: ScrollView {
+            if root.server-setup-success-kind != 0: VerticalLayout {
+                x: 22px; y: 112px; width: parent.width - 44px;
+                spacing: 15px;
+                Text {
+                    text: root.server-setup-success-kind == 1
+                        ? "Cloudflare backend installed successfully"
+                        : root.server-setup-success-kind == 2
+                        ? "Pending TURN setup recovered successfully"
+                        : root.server-setup-success-kind == 3
+                        ? "Worker updated successfully"
+                        : "Existing Cloudflare backend selected";
+                    color: #18703b; font-size: 17px; font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.server-setup-success-kind == 1
+                        ? "Worker, Durable Object and TURN are configured. The Worker health check passed."
+                        : root.server-setup-success-kind == 2
+                        ? "Existing TURN credentials were restored without rotation. Worker health and TURN configuration passed verification."
+                        : root.server-setup-success-kind == 3
+                        ? "Cloudflare accepted the Worker update without a Durable Object reset. Post-update health has not yet been checked."
+                        : "This Worker passed the health check and is now the signaling server.";
+                    color: WorkbenchStyle.text; font-size: 13px; wrap: word-wrap;
+                }
+                Text {
+                    text: "Worker: redesk-signal";
+                    color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-success-url;
+                    color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;
+                }
+                Text {
+                    text: root.server-setup-success-kind == 1 || root.server-setup-success-kind == 2
+                        ? "Worker Health: Verified    TURN: Configured"
+                        : root.server-setup-success-kind == 3
+                        ? "Worker: Updated    Post-update health: Not verified"
+                        : "Worker Health: Verified";
+                    color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;
+                }
+            }
+            if root.server-setup-review-open && root.server-setup-success-kind == 0: ScrollView {
                 x: 22px; y: 107px; width: parent.width - 44px;
                 height: max(90px, parent.height -
                     (root.server-setup-error != "" || root.server-setup-status != "" ? 266px : 183px));
@@ -4114,7 +4163,7 @@ export component MainWindow inherits Window {
             }
             // Single-choice server picker. The three options are selectable
             // rows, not action buttons; Continue opens the selected provider.
-            if root.server-setup-page == 0 && !root.server-setup-review-open: VerticalLayout {
+            if root.server-setup-page == 0 && !root.server-setup-review-open && root.server-setup-success-kind == 0: VerticalLayout {
                 x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
                 Rectangle {
                     width: parent.width; height: 72px; border-radius: UiRadius.control;
@@ -4245,7 +4294,7 @@ export component MainWindow inherits Window {
             }
             // Keep fields in a measured, scrollable layout. The dedicated
             // feedback area below is never laid over a form input.
-            if root.server-setup-page == 1 && !root.server-setup-review-open: ScrollView {
+            if root.server-setup-page == 1 && !root.server-setup-review-open && root.server-setup-success-kind == 0: ScrollView {
                 x: 22px; y: root.server-setup-postconnect ? 130px : 110px; width: parent.width - 44px;
                 height: max(90px, parent.height -
                     (root.server-setup-error != "" || root.server-setup-status != "" ? 249px : 171px)
@@ -4412,7 +4461,7 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-            if root.server-setup-switch-confirm: Rectangle {
+            if root.server-setup-switch-confirm && root.server-setup-success-kind == 0: Rectangle {
                 x: 22px; y: 110px; width: parent.width - 44px;
                 height: 184px; background: #fff8ec; border-radius: UiRadius.control;
                 border-width: 1px; border-color: #e5bb78;
@@ -4447,7 +4496,7 @@ export component MainWindow inherits Window {
             }
             // Feedback always has its own reserved row above footer actions.
             // It must not overlap the Account ID input, even at small heights.
-            if root.server-setup-error != "" || root.server-setup-status != "": Rectangle {
+            if root.server-setup-success-kind == 0 && (root.server-setup-error != "" || root.server-setup-status != ""): Rectangle {
                 x: 22px; y: parent.height - 129px;
                 width: parent.width - 44px; height: 60px;
                 background: root.server-setup-error != "" ? #fff2f2 : #edf4ff;
@@ -4474,7 +4523,7 @@ export component MainWindow inherits Window {
             }
             HorizontalLayout {
                 x: 22px; y: parent.height - 56px; width: parent.width - 44px; height: 34px; spacing: 10px;
-                SettingsButton {
+                if root.server-setup-success-kind == 0: SettingsButton {
                     width: 84px; text: "Back";
                     enabled: root.server-setup-page > 0 && !root.server-setup-busy;
                     clicked => {
@@ -4491,7 +4540,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 Rectangle { horizontal-stretch: 1; }
-                SettingsButton {
+                if root.server-setup-success-kind == 0: SettingsButton {
                     width: 84px; text: "Cancel";
                     enabled: !root.server-setup-busy;
                     clicked => {
@@ -4506,15 +4555,25 @@ export component MainWindow inherits Window {
                 }
                 SettingsButton {
                     width: 92px; primary: true;
-                    text: root.server-setup-page == 0 ? "Continue"
+                    text: root.server-setup-success-kind != 0 ? "Finish"
+                        : root.server-setup-page == 0 ? "Continue"
                         : root.server-setup-busy ? "Working..." : "Finish";
-                    enabled: !root.server-setup-busy && !root.server-setup-review-open
-                        && !root.server-setup-switch-confirm
-                        && (root.server-setup-page == 0
-                            || (root.server-setup-page == 1
-                                && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1)));
+                    enabled: !root.server-setup-busy
+                        && (root.server-setup-success-kind != 0
+                            || (!root.server-setup-review-open && !root.server-setup-switch-confirm
+                                && (root.server-setup-page == 0
+                                    || (root.server-setup-page == 1
+                                        && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1)))));
                     clicked => {
-                        if root.server-setup-page == 0 {
+                        if root.server-setup-success-kind != 0 {
+                            root.server-setup-close();
+                            root.server-setup-success-kind = 0;
+                            root.server-setup-success-url = "";
+                            root.server-setup-review-open = false;
+                            root.server-setup-token = "";
+                            root.server-setup-status = "";
+                            root.server-setup-open = false;
+                        } else if root.server-setup-page == 0 {
                             root.server-setup-page = 1;
                             root.server-setup-error = "";
                             root.server-setup-status = "";
