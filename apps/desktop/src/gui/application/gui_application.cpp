@@ -2563,8 +2563,15 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
         std::string endpoint;
         auto result = cloudflare::CloudflareProvisioningService{}.ConfigureExisting(
             cloudflare::SetupOptions{.worker_url = url}, &endpoint);
-        return SlintUi::ServerSetupResult{result.ok, false,
-                                          std::move(endpoint), result.error};
+        SlintUi::ServerSetupResult response;
+        response.ok = result.ok;
+        response.endpoint = std::move(endpoint);
+        response.message = result.error;
+        // Existing Worker verification is a completed selection, not an
+        // install/update. Without a completion kind the generic success path
+        // leaves Finish on the previous page and repeats verification.
+        response.setup_completion_kind = result.ok ? 4 : 0;
+        return response;
       });
       return;
     }
