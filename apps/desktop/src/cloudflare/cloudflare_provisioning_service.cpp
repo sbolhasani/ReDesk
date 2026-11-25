@@ -9,6 +9,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <chrono>
+#include <thread>
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -250,8 +252,13 @@ BackendStatus CloudflareProvisioningService::CheckHealth(
   }
   auto client = Client(base);
   const auto response = client.Get("/health");
-  if (!response || response->status != 200) {
-    status.diagnostic = "The Worker health endpoint is unavailable";
+  if (!response) {
+    status.diagnostic = "Could not reach Worker /health (network, TLS or DNS error)";
+    return status;
+  }
+  if (response->status != 200) {
+    status.diagnostic = "Worker /health returned HTTP " +
+                        std::to_string(response->status);
     return status;
   }
   try {
@@ -414,10 +421,11 @@ BackendReview CloudflareProvisioningService::RetryHealth(
     if (!IsUpdateAvailable(refreshed.worker_version))
       refreshed.explanation += " No newer bundled version is available.";
   } else {
+    const auto probe = CheckHealth(previous.worker_url);
     refreshed.explanation =
-        "ReDesk /health is still unavailable or incompatible. "
-        "Use Existing and Update remain disabled. You may retry or go back "
-        "to correct the Worker URL.";
+        "ReDesk /health is unavailable: " + probe.diagnostic +
+        ". Use Existing and Update remain disabled. Confirm that the "
+        "workers.dev URL is correct and the Worker route is enabled.";
   }
   return refreshed;
 }
@@ -667,8 +675,20 @@ Result CloudflareProvisioningService::ProvisionNew(
       return {false, "Worker already exists. Use Existing Backend or confirm an update."};
     // Recover only if the Worker has a verified SignalHub binding and the
     // current /health still identifies it as the ReDesk signaling service.
-    if (!worker_url || !CheckHealth(*worker_url).redesk_health)
-      return {false, "Pending TURN recovery exists, but Worker identity cannot be verified"};
+    if (!worker_url)
+      return {false, "Pending TURN recovery exists, but Worker URL is missing"};
+    bool verified_identity = false;
+    std::string health_error;
+    for (int attempt = 0; attempt < 6; ++attempt) {
+      const auto health = CheckHealth(*worker_url);
+      if (health.redesk_health) { verified_identity = true; break; }
+      health_error = health.diagnostic;
+      if (attempt < 5) std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+    if (!verified_identity)
+      return {false, "Pending TURN recovery is safe but Worker identity could not "
+                     "be verified via /health: " + health_error +
+                     ". No TURN keys were changed."};
     Json keys;
     auto client = Client(kApi);
     auto listed = Decode(client.Get("/client/v4/accounts/" + account +
@@ -682,8 +702,19 @@ Result CloudflareProvisioningService::ProvisionNew(
     if (!matches) return {false, "Pending TURN key no longer matches Cloudflare"};
     const auto set = AddTurnSecrets(token, account, pending_uid, pending_secret);
     if (!set.ok) return {false, "TURN recovery failed: " + set.error};
-    if (!CheckHealth(*worker_url).turn_configured)
-      return {false, "TURN recovery installed secrets, but health is not yet ready"};
+    bool recovered_health = false;
+    for (int attempt = 0; attempt < 6; ++attempt) {
+      const auto health = CheckHealth(*worker_url);
+      if (health.redesk_health && health.turn_configured) {
+        recovered_health = true;
+        break;
+      }
+      if (attempt < 5) std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+    if (!recovered_health)
+      return {false, "TURN recovery installed secrets, but /health has not yet "
+                     "confirmed TURN. The encrypted recovery is preserved; "
+                     "retry later without creating a new key."};
     ClearPendingKey(account);
     return {true, {}};
   }
@@ -802,9 +833,19 @@ Result CloudflareProvisioningService::ProvisionNew(
 #endif
 
   if (progress) progress("Verifying Backend", "Running");
-  auto health = CheckHealth(base_url);
+  BackendStatus health;
+  for (int attempt = 0; attempt < 6; ++attempt) {
+    health = CheckHealth(base_url);
+    if (health.redesk_health && health.turn_configured) break;
+    if (attempt < 5) std::this_thread::sleep_for(std::chrono::seconds(2));
+  }
   if (!health.redesk_health || !health.turn_configured)
-    return {false, "Worker deployed but TURN/health verification failed; check Cloudflare state"};
+    return {false, "Worker deployed and TURN secrets were submitted, but "
+                   "verification is incomplete: " + health.diagnostic +
+                   (health.redesk_health ? " (TURN not yet reported configured)." : ".") +
+                   " The encrypted TURN recovery is retained. Do not reset "
+                   "the account or create another key; check the Worker URL "
+                   "and retry Resume Pending TURN Setup."};
   if (worker_url) *worker_url = base_url;
   ClearPendingKey(account);
   if (progress) progress("Verifying Backend", "Completed");
