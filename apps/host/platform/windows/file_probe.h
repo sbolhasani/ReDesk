@@ -7,6 +7,8 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <limits>
+#include <chrono>
 #include <stdexcept>
 #include <string_view>
 
@@ -17,8 +19,13 @@ namespace fs = std::filesystem;
 // listing, arbitrary remote destination, execution, or directory RPC.
 class FileProbe {
 public:
-    static constexpr std::uint64_t kMaxFile=256ull*1024*1024;
-    static constexpr std::uint64_t kMaxTotal=1024ull*1024*1024;
+    // The wire protocol uses 64-bit offsets. Only the destination's
+    // available space, active-transfer count and bounded metadata limit
+    // admission; there is no arbitrary per-file or per-session byte cap.
+    static constexpr std::uint64_t kMaxFile=static_cast<std::uint64_t>(INT64_MAX);
+    static constexpr std::uint64_t kFreeSpaceReserve=64ull*1024*1024;
+    static constexpr std::size_t kMaxActive=4;
+    static constexpr std::size_t kMaxTracked=4096;
     explicit FileProbe(SignalPeer& peer,const fs::path& root,const fs::path& outgoing)
         : peer_(peer),directory_(make_directory(root)),
           session_([this](const char* stream,const char* data,std::size_t size) {
@@ -28,12 +35,19 @@ public:
                     std::cout << "File send: " << (value==1?"completed":"failed or cancelled") << std::endl;
             },{false,false,4},[this](const crossdesk::file_transfer::ReceiveState& state) {
                 using crossdesk::file_transfer::ReceiveStatus;
-                if (state.status==ReceiveStatus::Receiving) return;
-                if (auto it=seen_.find(state.id);it!=seen_.end()) it->second.done=true;
+                if (auto it=seen_.find(state.id);it!=seen_.end()) {
+                    auto& file=it->second;
+                    if (state.status==ReceiveStatus::Receiving) {
+                        file.received=state.received;
+                        return;
+                    }
+                    finish(file,state.status==ReceiveStatus::Completed);
+                }
                 if (state.status==ReceiveStatus::Completed) {
                     ++completed_;
-                    std::cout << "File receive completed: " << state.received << " bytes" << std::endl;
-                } else std::cout << "File receive failed or cancelled" << std::endl;
+                    std::cout << "File receive completed: id=" << state.id << ", " << state.received << " bytes" << std::endl;
+                } else std::cout << "File receive failed or cancelled: id=" << state.id
+                                 << ", " << state.received << "/" << state.total << " bytes" << std::endl;
             }) {
         session_.SetDirectory(directory_);
         std::wcout << L"File receive directory: " << directory_.wstring() << std::endl;
@@ -65,7 +79,11 @@ public:
     }
     void tick() {
         if (failed_) return;
-        if (!active()) { stop(); return; }
+        if (!active()) {
+            if (peer_.status().file_queue_failed)
+                std::cout << "File transfer stopped: receive queue overflow" << std::endl;
+            stop(); return;
+        }
         try {
             // Recheck the isolated receive directory before processing data.
             validate_path(directory_,true);
@@ -75,14 +93,22 @@ public:
                     session_.Ack(packet.payload.data(),packet.payload.size());
                     continue;
                 }
-                if (!receive(packet.payload)) {
-                    std::cout << "File transfer rejected: invalid packet or probe limit" << std::endl;
-                    stop(); return;
-                }
+                receive(packet.payload);
             }
             // Bound disk and transport work per iteration; let video/input run.
             for (unsigned i=0;i<4 && active();++i)
                 if (!session_.Pump()) break;
+            const auto now=std::chrono::steady_clock::now();
+            if (now>=next_report_) {
+                const auto outgoing=session_.Snapshot();
+                if (outgoing.status==crossdesk::file_transfer::Status::Sending)
+                    std::cout << "File send progress: " << outgoing.acknowledged << "/" << outgoing.total << " bytes (ACK)" << std::endl;
+                for (const auto& entry:seen_)
+                    if (!entry.second.done)
+                        std::cout << "File receive progress: id=" << entry.first << ", "
+                                  << entry.second.received << "/" << entry.second.total << " bytes" << std::endl;
+                next_report_=now+std::chrono::seconds(5);
+            }
         } catch (...) {
             std::cout << "File transfer stopped: local filesystem or protocol error" << std::endl;
             stop();
@@ -90,7 +116,40 @@ public:
     }
     std::size_t completed() const { return completed_; }
 private:
-    struct Seen { std::uint64_t total; bool done=false; };
+    struct Seen {
+        std::uint64_t total;
+        std::uint64_t received=0;
+        bool done=false;
+        bool completed=false;
+    };
+    void finish(Seen& file,bool completed) {
+        if (file.done) return;
+        reserved_-=file.total;
+        --active_count_;
+        file.done=true;
+        file.completed=completed;
+    }
+    void ack(std::uint32_t id,std::uint64_t total,bool completed) {
+        const auto packet=crossdesk::EncodeFileTransferAck(
+            {crossdesk::kFileAckMagic,id,completed?total:0,total,completed?1u:2u});
+        if (active() && peer_.send_file_data(crossdesk::kFileFeedbackStream,packet.data(),packet.size())!=0)
+            std::cout << "File feedback submission failed: id=" << id << std::endl;
+    }
+    void reject(const crossdesk::FileChunkHeader& h,const char* reason) {
+        const auto it=seen_.find(h.file_id);
+        if (it!=seen_.end()) {
+            auto& file=it->second;
+            if (file.done) { ack(h.file_id,h.total_size,false); return; }
+            // Cancel the engine's staging file, never other transfers.
+            session_.CancelReceive(h.file_id);
+            finish(file,false); // idempotent if callback already finished it
+        } else if (seen_.size()<kMaxTracked) {
+            seen_.emplace(h.file_id,Seen{h.total_size,0,true,false});
+        }
+        std::cout << "File rejected: id=" << h.file_id << ", bytes=" << h.total_size
+                  << ", reason=" << reason << std::endl;
+        ack(h.file_id,h.total_size,false);
+    }
     static void validate_path(const fs::path& p,bool directory) {
         // Accept drive-letter absolute local paths only, not device/UNC paths,
         // alternate streams, parent traversals or junction/symlink ancestors.
@@ -150,38 +209,71 @@ private:
             return false;
         return true;
     }
-    bool receive(const std::string& data) {
+    void receive(const std::string& data) {
         using namespace crossdesk;
         FileChunkView chunk;
-        if(!DecodeFileChunk(data.data(),data.size(),&chunk)) return false;
+        if(!DecodeFileChunk(data.data(),data.size(),&chunk)) {
+            std::cout << "Malformed file packet ignored" << std::endl;
+            return;
+        }
         const auto& h=chunk.header;
         if(!h.file_id || h.total_size>kMaxFile ||
            data.size()!=sizeof(FileChunkHeader)+h.name_len+chunk.payload_size ||
-           chunk.payload_size>kFileChunkSize) return false;
+           chunk.payload_size>kFileChunkSize) {
+            reject(h,"invalid file header"); return;
+        }
         const bool cancel=h.flags==kFileCancelFlag;
         const bool first=(h.flags&1)!=0;
         if(cancel) {
-            if(h.offset||h.name_len||h.chunk_size) return false;
+            if(h.offset||h.name_len||h.chunk_size) {
+                reject(h,"invalid cancellation"); return;
+            }
         } else if((h.flags&~3u) || (first && (h.offset || !safe_name(chunk.file_name))) ||
                   (!first && h.name_len) || (!chunk.payload_size && !(h.flags&2)) ||
-                  (((h.flags&2)!=0)!=(h.offset+chunk.payload_size==h.total_size))) return false;
-        auto it=seen_.find(h.file_id);
-        if(it==seen_.end()) {
-            if(seen_.size()>=128 || h.total_size>kMaxTotal-reserved_) return false;
-            reserved_+=h.total_size;
-            it=seen_.emplace(h.file_id,Seen{h.total_size,false}).first;
+                  (((h.flags&2)!=0)!=(h.offset+chunk.payload_size==h.total_size))) {
+            reject(h,"invalid filename or chunk"); return;
         }
-        if(it->second.total!=h.total_size) return false;
-        if(it->second.done) return true; // don't recreate a finished/cancelled file
-        session_.Receive(data.data(),data.size());
-        if(cancel) it->second.done=true;
-        // Shared engine reports protocol/write failures and cleans that file.
-        return true;
+        auto it=seen_.find(h.file_id);
+        if(it!=seen_.end()) {
+            if(it->second.total!=h.total_size) { reject(h,"inconsistent file size"); return; }
+            if(it->second.done) {
+                ack(h.file_id,h.total_size,it->second.completed && !cancel);
+                return;
+            }
+        } else {
+            if(cancel) {
+                if(seen_.size()<kMaxTracked)
+                    seen_.emplace(h.file_id,Seen{h.total_size,0,true,false});
+                ack(h.file_id,h.total_size,false);
+                return;
+            }
+            if(seen_.size()>=kMaxTracked || active_count_>=kMaxActive) {
+                reject(h,"too many transfers"); return;
+            }
+            std::error_code ec;
+            const auto space=fs::space(directory_,ec);
+            // Conservatively reserve each active file's full size, so a
+            // future chunk cannot commit more storage than initially allowed.
+            if(ec || space.available<kFreeSpaceReserve ||
+               reserved_>space.available-kFreeSpaceReserve ||
+               h.total_size>space.available-kFreeSpaceReserve-reserved_) {
+                reject(h,"insufficient free disk space"); return;
+            }
+            it=seen_.emplace(h.file_id,Seen{h.total_size}).first;
+            reserved_+=h.total_size;
+            ++active_count_;
+            std::cout << "File receive started: id=" << h.file_id << ", bytes=" << h.total_size << std::endl;
+        }
+        const bool accepted=session_.Receive(data.data(),data.size());
+        if(cancel || !accepted) finish(it->second,false);
+        // The shared engine sends its own ACK and clears failed staging files.
     }
     SignalPeer& peer_;
     fs::path directory_;
     std::map<std::uint32_t,Seen> seen_;
     std::uint64_t reserved_=0;
+    std::size_t active_count_=0;
+    std::chrono::steady_clock::time_point next_report_{};
     std::size_t completed_=0;
     bool failed_=false;
     crossdesk::file_transfer::Session session_;

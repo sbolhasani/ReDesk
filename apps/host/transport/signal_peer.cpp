@@ -265,8 +265,9 @@ void SignalPeer::receive_input(const char* data, size_t size, const char* id, si
             if (stream == crossdesk::kFileStream &&
                 (size < sizeof(crossdesk::FileChunkHeader) ||
                  size > crossdesk::kFileChunkSize + sizeof(crossdesk::FileChunkHeader) + 240)) return;
-            // Independent 4 MiB-ish queue; overload cancels files, not desktop control.
-            if (self.files_.size() >= 64) {
+            // Bound the queue to roughly 16 MiB, including concurrent
+            // 1 MiB sender windows, ACKs and scheduling bursts.
+            if (self.files_.size() >= 256) {
                 self.status_.file_queue_failed = true;
                 self.files_.clear();
                 return;
@@ -381,7 +382,7 @@ std::vector<SignalPeer::InputMessage> SignalPeer::take_files() {
         files_.clear();
         return result;
     }
-    const auto count = (std::min)(files_.size(),std::size_t{8});
+    const auto count = (std::min)(files_.size(),std::size_t{32});
     result.reserve(count);
     for (std::size_t i=0;i<count;++i) {
         result.push_back(std::move(files_.front()));

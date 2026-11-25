@@ -33,6 +33,8 @@ std::string numeric_test_password() {
 }
 int main(int argc, char** argv) {
     bool control=false, clipboard=false, audio=false;
+    unsigned duration_minutes=15;
+    bool duration_set=false;
     std::filesystem::path receive_dir,send_file;
     int wide_argc=0;
     auto wide_argv=CommandLineToArgvW(GetCommandLineW(),&wide_argc);
@@ -45,12 +47,26 @@ int main(int argc, char** argv) {
         else if(flag=="--audio" && !audio) audio=true;
         else if(flag=="--files" && receive_dir.empty() && i+1<argc) receive_dir=wide_argv[++i];
         else if(flag=="--send-file" && send_file.empty() && i+1<argc) send_file=wide_argv[++i];
+        else if(flag=="--duration-minutes" && !duration_set && i+1<argc) {
+            duration_set=true;
+            const std::string_view value(argv[++i]);
+            unsigned parsed=0;
+            if(value.empty() || value.size()>3) valid=false;
+            else {
+                for(char ch:value) {
+                    if(ch<'0' || ch>'9') { valid=false; break; }
+                    parsed=parsed*10+static_cast<unsigned>(ch-'0');
+                }
+                if(parsed<1 || parsed>120) valid=false;
+                else duration_minutes=parsed;
+            }
+        }
         else valid=false;
     }
     LocalFree(wide_argv);
     const bool files=!receive_dir.empty();
     if (!valid || ((clipboard || files) && !control) || (!files && !send_file.empty())) {
-        std::cout << "Usage: redesk-host-view-probe wss://server/signal VIEWER_NUMERIC_ID [--control] [--clipboard] [--audio] [--files EXISTING_LOCAL_DIRECTORY] [--send-file LOCAL_FILE]\n"
+        std::cout << "Usage: redesk-host-view-probe wss://server/signal VIEWER_NUMERIC_ID [--control] [--clipboard] [--audio] [--files EXISTING_LOCAL_DIRECTORY] [--send-file LOCAL_FILE] [--duration-minutes 1-120]\n"
                      "Temporary registration, one approved viewer, primary display only.\n";
         return argc == 1 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -114,7 +130,7 @@ int main(int argc, char** argv) {
             std::cerr << "Viewer not connected or admission revoked\n";
             return EXIT_FAILURE;
         }
-        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to 15 minutes?" : " to view the primary monitor for up to 15 minutes? No remote control.") + (clipboard ? "\nClipboard text will be shared in both directions after approval." : "") + (audio ? "\nSystem playback audio will be shared after approval (not microphone)." : "") + (files ? "\nFile transfers are allowed into a new isolated folder." : "") + (!send_file.empty() ? "\nThe locally selected file will also be sent to this viewer." : "");
+        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to " : " to view the primary monitor for up to ") + std::to_string(duration_minutes) + " minutes?" + (control ? "" : " No remote control.") + (clipboard ? "\nClipboard text will be shared in both directions after approval." : "") + (audio ? "\nSystem playback audio will be shared after approval (not microphone)." : "") + (files ? "\nFile transfers are allowed into a new isolated folder." : "") + (!send_file.empty() ? "\nThe locally selected file will also be sent to this viewer." : "");
         if (MessageBoxA(nullptr, prompt.c_str(), "ReDesk Host - view test",
             MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES ||
             !peer.approve_viewer()) return EXIT_FAILURE;
@@ -155,9 +171,9 @@ int main(int argc, char** argv) {
         std::uint64_t audio_submitted_at_report=0;
         capture.start();
         std::cout << (control ? "View and control enabled. " : "View-only. ")
-                  << "Press Esc to stop; timeout 15 minutes.\n";
+                  << "Press Esc to stop; timeout " << duration_minutes << " minutes.\n";
         std::uint64_t last = 0, frames = 0;
-        deadline = std::chrono::steady_clock::now() + 15min;
+        deadline = std::chrono::steady_clock::now() + std::chrono::minutes(duration_minutes);
         while (peer.view_active() && std::chrono::steady_clock::now() < deadline &&
                !(GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
             // This probe does not authorize lock-screen/UAC input or capture.
