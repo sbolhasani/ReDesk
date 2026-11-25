@@ -1024,6 +1024,8 @@ struct GuiApplication::SlintUi {
     bool worker_version_probe = false;
     bool turn_recovery_completion = false;
     bool setup_retry_attempt = false;
+    // 0=none; 1=orphaned encrypted local recovery; 2=orphaned Cloudflare TURN key.
+    int reconcile_kind = 0;
     // 0 = no setup completion, 1 = install, 2 = TURN recovery, 3 = update.
     int setup_completion_kind = 0;
     std::string discovered_account_id;
@@ -2175,6 +2177,50 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
       main->set_server_setup_error("Review has expired. Validate the token again.");
       return;
     }
+    if (action == 4) {
+      const int kind = main->get_server_setup_reconcile_kind();
+      if (!main->get_server_setup_retry_available() ||
+          (kind != 1 && kind != 2) || HasActiveSession()) {
+        main->set_server_setup_error("No confirmed reconciliation is available.");
+        return;
+      }
+      const std::string token = ui_->server_setup_pending_token;
+      main->set_server_setup_reconcile_kind(0);
+      main->set_server_setup_busy(true);
+      main->set_server_setup_error("");
+      main->set_server_setup_status("Reconciling verified incomplete TURN setup...");
+      ui_->server_setup_gallery_window = main->get_gallery_mode();
+      ui_->server_setup_future = std::async(std::launch::async,
+          [token, review, kind] {
+        cloudflare::CloudflareProvisioningService service;
+        SlintUi::ServerSetupResult result;
+        result.setup_retry_attempt = true;
+        result.setup_completion_kind = 1;
+        const auto cleanup = kind == 1
+            ? service.DiscardOrphanTurnRecovery(token, review.account_id)
+            : service.DeleteOrphanTurnKey(token, review.account_id);
+        if (!cleanup.ok) {
+          result.message = "Reconciliation stopped: " + cleanup.error;
+          return result;
+        }
+        std::string url = review.worker_url;
+        const auto installed = service.ProvisionNew(
+            token, review.account_id, cloudflare::kReDeskSignalingWorker, &url);
+        result.ok = installed.ok;
+        result.message = installed.error;
+        if (result.ok &&
+            !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+                url, nullptr, &result.endpoint)) {
+          result.ok = false;
+          result.message = "Worker URL invalid after reconciliation";
+        }
+        if (!result.ok)
+          result.message = "Reconciliation completed; setup is still incomplete: " +
+                           result.message + ". Retry will recheck Cloudflare.";
+        return result;
+      });
+      return;
+    }
     if (action == 3) {
       // Retry is an independent read-only preflight followed by the safe
       // new-install/recovery path. Never re-use a stale review to mutate
@@ -2215,6 +2261,25 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
         const bool fresh_install = !refreshed.worker_exists &&
             refreshed.turn_keys_checked && !refreshed.existing_turn_key;
         const bool pending_recovery = refreshed.pending_turn_recovery;
+        if (!refreshed.worker_exists && refreshed.turn_keys_checked &&
+            !refreshed.existing_turn_key &&
+            cloudflare::CloudflareProvisioningService::HasPendingTurnRecovery(
+                review.account_id)) {
+          result.reconcile_kind = 1;
+          result.message = "The encrypted TURN recovery file exists locally, "
+              "but its key is absent from Cloudflare. Confirm removal of ONLY "
+              "the orphaned local recovery file, followed by a fresh install.";
+          return result;
+        }
+        if (!refreshed.worker_exists && refreshed.turn_keys_checked &&
+            refreshed.existing_turn_key && !pending_recovery) {
+          result.reconcile_kind = 2;
+          result.message = "A ReDesk TURN key exists in Cloudflare, but its "
+              "secret cannot be recovered. Confirm deleting ONLY the orphaned "
+              "ReDesk TURN key and recreating it. This revokes any clients "
+              "using the old key. No Worker or Durable Object will be deleted.";
+          return result;
+        }
         if (!fresh_install && !pending_recovery) {
           result.message = "Retry cannot safely continue: " +
               refreshed.explanation +
@@ -3174,6 +3239,11 @@ void GuiApplication::Tick() {
       window->set_server_setup_confirm_update(false);
       window->set_server_setup_error("");
     } else if (!result.ok) {
+      if (result.reconcile_kind != 0) {
+        window->set_server_setup_reconcile_kind(result.reconcile_kind);
+      } else {
+        window->set_server_setup_reconcile_kind(0);
+      }
       // Retain the verified in-memory token, account and review so Retry Setup
       // can safely re-inspect Cloudflare without requiring the user to start over.
       window->set_server_setup_retry_available(
@@ -3189,6 +3259,7 @@ void GuiApplication::Tick() {
       window->set_server_setup_error("Cloudflare setup succeeded but saving the server configuration failed. Retry Setup will recheck the backend.");
     } else {
       window->set_server_setup_retry_available(false);
+      window->set_server_setup_reconcile_kind(0);
       const std::string completed_worker_url = ui_->server_setup_review.worker_url;
       ui_->server_setup_pending_token.clear();
       ui_->server_setup_review = {};
