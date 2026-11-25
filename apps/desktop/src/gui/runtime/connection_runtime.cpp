@@ -46,15 +46,21 @@ void GuiRuntime::MuteRemoteAudio(const std::shared_ptr<RemoteSession>& props) {
     devices_.ClearAudio(props->remote_id_);
     props->preview_needs_sync_ = true;
   }
-  // Match UnmuteRemoteAudio for hosts without preview negotiation.
-  // Negotiated subscriptions remain authoritative on capable hosts.
-  if (!props->closing_ && props->peer_ && props->connection_established_) {
+  // Negotiated hosts already receive demand through preview subscriptions.
+  // Legacy hosts need the explicit command in addition to local playback mute.
+  if (!props->closing_ && props->peer_ &&
+      props->connection_status_.load() == MiniRtcConnectionStatus::MiniRtcConnectionConnected &&
+      !props->preview_subscription_supported_) {
     RemoteAction action{};
     action.type = ControlType::audio_capture;
     action.a = false;
     const auto message = action.to_json();
-    MiniRtcSendReliableDataFrame(props->peer_, message.data(), message.size(),
-                                 props->control_data_label_.c_str());
+    const auto wire_id = props->peer_events_ ?
+        props->peer_events_->WireId(props->remote_id_) : props->remote_id_;
+    const int ret = MiniRtcSendReliableDataFrameToPeer(props->peer_,
+        message.data(), message.size(), props->control_data_label_.c_str(),
+        wire_id.data(), wire_id.size());
+    LOG_INFO("Viewer audio command: mute, submit_result={}", ret);
   }
 }
 
@@ -62,13 +68,18 @@ void GuiRuntime::UnmuteRemoteAudio(const std::shared_ptr<RemoteSession>& props) 
   if (!props || props->closing_) return;
   props->audio_capture_button_pressed_ = true;
   props->preview_needs_sync_ = true;
-  // Also resume capture on old peers, or after a legacy controller stopped it.
+  // Retain existing resume behavior for negotiated hosts.
+  if (!props->peer_) return;
   RemoteAction action{};
   action.type = ControlType::audio_capture;
   action.a = true;
   const auto message = action.to_json();
-  MiniRtcSendReliableDataFrame(props->peer_, message.data(), message.size(),
-                        props->control_data_label_.c_str());
+  const auto wire_id = props->peer_events_ ?
+      props->peer_events_->WireId(props->remote_id_) : props->remote_id_;
+  const int ret = MiniRtcSendReliableDataFrameToPeer(props->peer_,
+      message.data(), message.size(), props->control_data_label_.c_str(),
+      wire_id.data(), wire_id.size());
+  LOG_INFO("Viewer audio command: unmute, submit_result={}", ret);
 }
 
 void GuiRuntime::HandleConnectionStatusChange() {

@@ -138,6 +138,7 @@ int main(int argc, char** argv) {
         bool audio_running_seen=false;
         std::optional<bool> last_audio;
         std::optional<bool> last_audio_running;
+        std::uint64_t last_audio_commands=0;
         auto next_audio_report=std::chrono::steady_clock::now();
         std::uint64_t audio_submitted_at_report=0;
         capture.start();
@@ -164,7 +165,13 @@ int main(int argc, char** argv) {
                     [&](const std::string& value) { return peer.send_clipboard(value); });
             }
             if (sound) {
+                const auto control_status=peer.status();
                 const bool requested=peer.audio_requested();
+                if (control_status.audio_commands != last_audio_commands) {
+                    std::cout << "Audio command received (#" << control_status.audio_commands
+                              << "): " << (requested ? "enable" : "mute") << std::endl;
+                    last_audio_commands=control_status.audio_commands;
+                }
                 // Keep the previously verified PCM submission path. Mute
                 // stops capture and clears its bounded queue, independently
                 // of optional transport pause APIs.
@@ -187,7 +194,9 @@ int main(int argc, char** argv) {
                 const auto now=std::chrono::steady_clock::now();
                 if (now>=next_audio_report) {
                     std::cout << "Audio packets submitted since last report: "
-                              << audio_packets-audio_submitted_at_report << std::endl;
+                              << audio_packets-audio_submitted_at_report
+                              << "; control messages: " << control_status.control_messages
+                              << "; audio commands: " << control_status.audio_commands << std::endl;
                     audio_submitted_at_report=audio_packets;
                     next_audio_report=now+5s;
                 }

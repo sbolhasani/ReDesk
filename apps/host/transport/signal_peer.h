@@ -22,6 +22,8 @@ public:
         std::string device_id;
         bool viewer_connected = false;
         bool revoked = false;
+        std::uint64_t audio_commands = 0;
+        std::uint64_t control_messages = 0;
     };
     SignalPeer(std::string endpoint, std::string device_id, std::string password, DeviceKey key);
     ~SignalPeer();

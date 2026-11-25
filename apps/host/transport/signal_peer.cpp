@@ -249,7 +249,8 @@ void SignalPeer::receive_input(const char* data, size_t size, const char* id, si
             std::string_view(id,id_size) != self.expected_viewer_) return;
         const std::string_view stream(source, source_size);
         const bool clip = stream == crossdesk::kClipboardStream;
-        const bool audio_control = stream == crossdesk::kControlStream;
+        const bool audio_control = stream == crossdesk::kControlStream ||
+                                   stream == crossdesk::kWebControlStream;
         if (!clip && (size > 32768 || (!audio_control && stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream))) return;
         std::lock_guard<std::mutex> lock(self.mutex_);
         if (!self.approved_ || self.status_.revoked ||
@@ -257,11 +258,14 @@ void SignalPeer::receive_input(const char* data, size_t size, const char* id, si
         if (audio_control) {
             // This probe advertises no preview negotiation. Only the legacy
             // audio_capture command is actionable; ignore preview subscriptions.
+            ++self.status_.control_messages;
             if (!self.allow_audio_ || size > 1024) return;
             const auto msg = nlohmann::json::parse(data,data+size,nullptr,false);
             if (msg.is_object() && msg.contains("type") && msg["type"] == 2 &&
-                msg.contains("audio_capture") && msg["audio_capture"].is_boolean())
+                msg.contains("audio_capture") && msg["audio_capture"].is_boolean()) {
                 self.audio_requested_ = msg["audio_capture"].get<bool>();
+                ++self.status_.audio_commands;
+            }
             return;
         }
         if (!self.allow_input_) return;
