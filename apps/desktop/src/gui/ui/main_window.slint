@@ -810,6 +810,7 @@ export component MainWindow inherits Window {
     in-out property <string> server-setup-bundled-version: "1.0.0";
     callback server-setup-manage-worker();
     in-out property <bool> server-setup-review-open: false;
+    in-out property <bool> server-setup-retry-available: false;
     // 0 = normal, 1 = installed, 2 = resumed TURN, 3 = updated, 4 = existing.
     in-out property <int> server-setup-success-kind: 0;
     in-out property <string> server-setup-success-url: "";
@@ -3082,6 +3083,7 @@ export component MainWindow inherits Window {
                                         root.server-setup-switch-confirm = false;
                                         root.server-setup-success-kind = 0;
                                         root.server-setup-success-url = "";
+                                        root.server-setup-retry-available = false;
                                         root.server-setup-open = true;
                                         root.server-setup-page = 0;
                                     }
@@ -4127,7 +4129,15 @@ export component MainWindow inherits Window {
                     enabled: root.server-setup-review-can-update && !root.server-setup-busy;
                     clicked => { root.server-setup-confirm-update = true; }
                 }
-                if root.server-setup-review-can-install || root.server-setup-review-can-resume: SettingsButton {
+                if root.server-setup-retry-available: SettingsButton {
+                    width: parent.width; height: 34px;
+                    primary: true;
+                    text: root.server-setup-busy ? "Retrying setup..." : "Retry Setup";
+                    enabled: !root.server-setup-busy;
+                    clicked => { root.server-setup-decision(3); }
+                }
+                if !root.server-setup-retry-available &&
+                        (root.server-setup-review-can-install || root.server-setup-review-can-resume): SettingsButton {
                     width: parent.width; height: 34px;
                     primary: true;
                     text: root.server-setup-review-can-resume
@@ -4135,7 +4145,8 @@ export component MainWindow inherits Window {
                     enabled: !root.server-setup-busy;
                     clicked => { root.server-setup-decision(1); }
                 }
-                if !root.server-setup-review-existing && !root.server-setup-review-can-install
+                if !root.server-setup-retry-available && !root.server-setup-review-existing
+                        && !root.server-setup-review-can-install
                         && !root.server-setup-review-can-resume: Text {
                     text: root.server-setup-review-turn-checked
                         ? "Installation unavailable: inspect the status above."
@@ -4406,6 +4417,7 @@ export component MainWindow inherits Window {
                                         root.server-setup-account = "";
                                         root.server-setup-host = "";
                                         root.server-setup-review-open = false;
+                                        root.server-setup-retry-available = false;
                                         root.server-setup-confirm-update = false;
                                         root.server-setup-error = "";
                                         root.server-setup-status = "";
@@ -4548,6 +4560,7 @@ export component MainWindow inherits Window {
                         root.server-setup-switch-confirm = false;
                         root.server-setup-open = false;
                         root.server-setup-review-open = false;
+                        root.server-setup-retry-available = false;
                         root.server-setup-confirm-update = false;
                         root.server-setup-token = "";
                         root.server-setup-status = "";
