@@ -1,4 +1,6 @@
 #include "signal_peer.h"
+#include <stream_names.h>
+#include <display_stream_id.h>
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
@@ -49,18 +51,41 @@ SignalPeer::SignalPeer(std::string endpoint, std::string device_id, std::string 
 SignalPeer::~SignalPeer() {
     stop();
     if (!login_id_.empty()) OPENSSL_cleanse(login_id_.data(), login_id_.size());
+    if (!registration_password_.empty()) OPENSSL_cleanse(registration_password_.data(), registration_password_.size());
 }
 void SignalPeer::start() {
     if (started_) throw std::logic_error("Signaling peer is single-use");
     started_ = true;
     peer_ = MiniRtcCreatePeer(&params_);
     if (!peer_) throw std::runtime_error("Cannot allocate signaling peer");
+    if (!expected_viewer_.empty()) {
+        // Keep wire-compatible stream negotiation, but never register an
+        // incoming data callback or send audio/files/clipboard/input.
+        if (MiniRtcAddVideoStream(peer_, "Display1") != 0 ||
+            MiniRtcAddAudioStream(peer_, crossdesk::kAudioStream) != 0 ||
+            MiniRtcAddDataStream(peer_, crossdesk::kDataStream, false) != 0 ||
+            MiniRtcAddDataStream(peer_, crossdesk::kControlStream, true) != 0 ||
+            MiniRtcAddDataStream(peer_, crossdesk::kMouseStream, true) != 0 ||
+            MiniRtcAddDataStream(peer_, crossdesk::kKeyboardStream, true) != 0 ||
+            MiniRtcAddDataStream(peer_, crossdesk::kFileStream, true) != 0 ||
+            MiniRtcAddDataStream(peer_, crossdesk::kFileFeedbackStream, true) != 0 ||
+            MiniRtcAddDataStream(peer_, crossdesk::kClipboardStream, true) != 0) {
+            stop();
+            throw std::runtime_error("Cannot register diagnostic streams");
+        }
+    }
     if (MiniRtcInit(peer_) != 0) {
         stop();
         throw std::runtime_error("Cannot initialize signaling peer");
     }
 }
 void SignalPeer::stop() noexcept {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        approved_ = false;
+        status_.revoked = true;
+        status_.viewer_connected = false;
+    }
     if (peer_) MiniRtcDestroyPeer(&peer_);
 }
 SignalPeer::Status SignalPeer::status() const {
@@ -72,18 +97,40 @@ int SignalPeer::exchange(MiniRtcSignalExchangeStage stage, const char* data, siz
     try {
         if (!context || !data || !response || size == 0 || size > 65536) return -1;
         auto& self = *static_cast<SignalPeer*>(context);
-        if (stage == MiniRtcSignalExchangeStage::IncomingMessage && !self.login_.Pending()) {
-            // This diagnostic must not accept incoming sessions. Return a
-            // protocol failure for a join notification rather than opening ICE.
-            const auto msg = nlohmann::json::parse(data, data + size, nullptr, false);
-            if (!msg.is_object()) return -1;
+        const auto msg = nlohmann::json::parse(data, data + size, nullptr, false);
+        if (!msg.is_object()) return -1;
+        if (stage == MiniRtcSignalExchangeStage::IncomingMessage) {
             const auto type = msg.value("type", std::string{});
-            if (type == "user_join_transmission" || type == "offer") return -1;
-            return 0;
+            if (type == "offer" || type == "user_join_transmission") {
+                std::lock_guard<std::mutex> lock(self.mutex_);
+                if (type != "user_join_transmission" || self.expected_viewer_.empty() ||
+                    self.login_.Pending() || self.status_.state != MiniRtcSignalConnected ||
+                    self.status_.revoked || self.join_seen_ ||
+                    msg.value("status", std::string{}) != "success" ||
+                    msg.value("user_id", std::string{}) != self.expected_viewer_ ||
+                    msg.value("transmission_id", std::string{}) != self.status_.device_id) {
+                    self.approved_ = false;
+                    self.status_.revoked = true;
+                    return -1;
+                }
+                self.join_seen_ = true;
+                return 0;
+            }
+            if (!self.login_.Pending()) return 0;
         }
-        return self.login_.ExchangeWithSigner(stage, nlohmann::json::parse(data, data + size),
+        const auto result = self.login_.ExchangeWithSigner(stage, msg,
             self.key_.PublicKey(), [&](std::string_view text) { return self.key_.Sign(text); },
             response, capacity);
+        if (result == 0 && stage == MiniRtcSignalExchangeStage::IncomingMessage &&
+            !self.expected_viewer_.empty() && msg.value("type", std::string{}) == "login" &&
+            msg.value("status", std::string{}) == "success") {
+            const auto assigned = msg.at("user_id").get<std::string>();
+            const auto at = assigned.find('@');
+            std::lock_guard<std::mutex> lock(self.mutex_);
+            if (at != std::string::npos && valid_password(std::string_view(assigned).substr(at+1)))
+                self.registration_password_ = assigned.substr(at+1);
+        }
+        return result;
     } catch (...) { return -1; }
 }
 void SignalPeer::signal_status(MiniRtcSignalStatus state, const char* id, size_t size,
@@ -92,6 +139,12 @@ void SignalPeer::signal_status(MiniRtcSignalStatus state, const char* id, size_t
         if (!context) return;
         auto& self = *static_cast<SignalPeer*>(context);
         std::lock_guard<std::mutex> lock(self.mutex_);
+        if (!self.expected_viewer_.empty() &&
+            self.status_.state == MiniRtcSignalConnected && state != MiniRtcSignalConnected) {
+            self.approved_ = false;
+            self.status_.revoked = true;
+            self.status_.viewer_connected = false;
+        }
         self.status_.state = state;
         if (state == MiniRtcSignalConnected) {
             if (!id || !size || size > 128 || !valid_id({id,size})) {
@@ -103,14 +156,70 @@ void SignalPeer::signal_status(MiniRtcSignalStatus state, const char* id, size_t
         }
     } catch (...) {}
 }
-void SignalPeer::connection_status(MiniRtcConnectionStatus state, const char*, size_t,
+void SignalPeer::connection_status(MiniRtcConnectionStatus state, const char* id, size_t size,
                                     void* context) noexcept {
-    // Never authorize application data or publish a session from this probe.
-    if (state == MiniRtcConnectionConnected)
-        signal_status(MiniRtcSignalFailed, nullptr, 0, context);
+    try {
+        if (!context) return;
+        auto& self = *static_cast<SignalPeer*>(context);
+        std::lock_guard<std::mutex> lock(self.mutex_);
+        if (self.expected_viewer_.empty()) {
+            if (state == MiniRtcConnectionConnected) self.status_.state = MiniRtcSignalFailed;
+            return;
+        }
+        if (!id || std::string_view(id, size) != self.expected_viewer_ ||
+            !self.join_seen_ || self.status_.revoked) {
+            self.approved_ = false;
+            self.status_.revoked = true;
+            self.status_.viewer_connected = false;
+            return;
+        }
+        if (state == MiniRtcConnectionConnected) {
+            self.status_.viewer_connected = true;
+        } else if (self.status_.viewer_connected ||
+                   (state != MiniRtcConnectionConnecting && state != MiniRtcConnectionGathering)) {
+            self.approved_ = false;
+            self.status_.revoked = true;
+            self.status_.viewer_connected = false;
+        }
+    } catch (...) {}
 }
 void SignalPeer::net_status(const char*, size_t, MiniRtcTraversalMode, const MiniRtcNetTrafficStats*,
                              const char*, size_t, void*) noexcept {
     // The initial report may carry ID@password. Do not log or expose it.
+}
+void SignalPeer::enable_view_probe(std::string viewer_id) {
+    if (started_ || !login_id_.empty() || viewer_id.rfind("C-",0) != 0 ||
+        viewer_id.size() <= 2 || !valid_id(std::string_view(viewer_id).substr(2)))
+        throw std::invalid_argument("Expected C-<viewer numeric ID> for a fresh test registration");
+    expected_viewer_ = std::move(viewer_id);
+}
+std::string SignalPeer::take_registration_password() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::exchange(registration_password_, {});
+}
+bool SignalPeer::approve_viewer() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (expected_viewer_.empty() || status_.revoked || !status_.viewer_connected ||
+        status_.state != MiniRtcSignalConnected) return false;
+    approved_ = true;
+    return true;
+}
+bool SignalPeer::view_active() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return approved_ && !status_.revoked && status_.viewer_connected &&
+           status_.state == MiniRtcSignalConnected;
+}
+bool SignalPeer::send_host_info(const std::string& message) {
+    if (!peer_ || !view_active()) return false;
+    return MiniRtcSendReliableDataFrameToPeer(peer_, message.data(), message.size(),
+        crossdesk::kControlStream, expected_viewer_.data(), expected_viewer_.size()) == 0;
+}
+bool SignalPeer::send_frame(const MiniRtcVideoFrame& frame) {
+    if (!peer_ || !view_active()) return false;
+    auto outgoing = frame;
+    const auto now = MiniRtcGetSystemTimeMicros(peer_);
+    outgoing.captured_timestamp = now > 0 ? static_cast<uint64_t>(now) : 0;
+    return MiniRtcSendVideoFrameToPeer(peer_, &outgoing, "Display1",
+        expected_viewer_.data(), expected_viewer_.size()) == 0;
 }
 }
