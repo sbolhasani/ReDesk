@@ -599,6 +599,43 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
   return review;
 }
 
+Result CloudflareProvisioningService::DiscardOrphanTurnRecovery(
+    const std::string& token, const std::string& account) const {
+#if !defined(_WIN32)
+  return {false, "TURN recovery reconciliation is supported on Windows only"};
+#else
+  if (!IsHex32(account) || token.empty())
+    return {false, "Valid Account ID and API token are required"};
+  std::string uid, secret;
+  if (!LoadPendingKey(account, &uid, &secret))
+    return {false, "There is no readable encrypted local TURN recovery to reconcile"};
+  auto validity = ValidateToken(token, account);
+  if (!validity.ok) return validity;
+  auto worker = Inspect(token, account);
+  if (worker.diagnostic != "Worker does not exist" || worker.worker_exists)
+    return {false, "Cannot discard local TURN recovery while a Worker exists "
+                   "or its absence cannot be verified"};
+  auto client = Client(kApi);
+  Json keys;
+  auto listed = Decode(client.Get(
+      "/client/v4/accounts/" + account + "/calls/turn_keys",
+      Authorization(token)), &keys);
+  if (!listed.ok || !keys.is_array())
+    return {false, "Cannot verify ReDesk TURN key absence; local recovery was preserved"};
+  for (const auto& key : keys) {
+    if (key.is_object() &&
+        (key.value("name", "") == "redesk-signal" ||
+         key.value("uid", "") == uid))
+      return {false, "A ReDesk TURN key or matching key ID still exists in "
+                     "Cloudflare. Nothing was removed"};
+  }
+  const auto path = RecoveryFile(account);
+  if (path.empty() || !DeleteFileA(path.c_str()))
+    return {false, "Could not remove the orphaned encrypted local recovery file"};
+  return {true, {}};
+#endif
+}
+
 Result CloudflareProvisioningService::ConfigureExisting(
     const SetupOptions& options, std::string* signal_address) const {
   if (options.existing_action != ExistingAction::UseExisting)
