@@ -475,7 +475,7 @@ BackendDiscovery CloudflareProvisioningService::DiscoverBackend(
       // Deterministic, account-specific candidate. It is not reserved or
       // guaranteed available until Cloudflare accepts it during Install.
       discovery.suggested_worker_url =
-          "https://redesk-signal.redesk-" + requested_account.substr(0, 12) +
+          "https://redesk-signal.rd-" + requested_account.substr(0, 8) +
           ".workers.dev";
       // Review the generated candidate immediately. A second Fetch must
       // not be necessary merely to accept the proposed URL.
