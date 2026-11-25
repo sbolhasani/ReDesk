@@ -543,8 +543,11 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
   review.worker_bindings_verified =
       worker.worker_exists && worker.durable_object_binding &&
       !worker.unexpected_bindings;
+  std::string health_diagnostic;
   if (worker.worker_exists) {
-    review = WithHealthStatus(review, CheckHealth(review.worker_url));
+    const auto health = CheckHealth(review.worker_url);
+    health_diagnostic = health.diagnostic;
+    review = WithHealthStatus(review, health);
   }
 
   // Inspect TURN without changing keys. A missing list permission blocks
@@ -576,7 +579,11 @@ BackendReview CloudflareProvisioningService::ReviewAccount(
     if (review.pending_turn_recovery && !review.turn_configured)
       review.explanation += " Pending TURN recovery is available on this Windows account.";
   } else if (review.worker_exists) {
-    review.explanation = "Worker exists but /health is not compatible. No installation or overwrite is permitted.";
+    review.explanation =
+        "Worker exists, but /health verification failed at " +
+        review.worker_url + ": " + health_diagnostic +
+        ". Retry Health Check; no installation or overwrite is permitted "
+        "until this Worker is verified.";
   } else if (!review.turn_keys_checked) {
     review.explanation = "No Worker was found, but TURN keys cannot be listed. "
                          "Installation is blocked until the token can inspect them.";
