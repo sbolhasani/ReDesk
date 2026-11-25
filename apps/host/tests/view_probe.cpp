@@ -13,10 +13,22 @@
 #include <cstdlib>
 #include <iostream>
 #include <thread>
+#include <openssl/rand.h>
 
 using namespace redesk::host;
 using namespace redesk::host::windows;
 using namespace std::chrono_literals;
+namespace {
+std::string numeric_test_password() {
+    std::string result;
+    while (result.size() < 6) {
+        unsigned char byte=0;
+        if (RAND_bytes(&byte,1)!=1) throw std::runtime_error("Random generator failed");
+        if (byte<250) result += static_cast<char>('0' + byte%10);
+    }
+    return result;
+}
+}
 int main(int argc, char** argv) {
     bool control=false, clipboard=false, audio=false;
     bool valid=argc>=3;
@@ -59,13 +71,32 @@ int main(int argc, char** argv) {
             std::cerr << "Server did not provide a new registration password\n";
             return EXIT_FAILURE;
         }
-        std::cout << "Temporary host ID: " << status.device_id
+        // Rotate only this freshly created diagnostic identity. Never alter
+        // an existing user's password. Wait for the server's acknowledgement.
+        OPENSSL_cleanse(password.data(),password.size());
+        password=numeric_test_password();
+        if (!peer.request_test_password(password)) {
+            std::cerr << "Could not request numeric diagnostic password\n";
+            return EXIT_FAILURE;
+        }
+        deadline=std::chrono::steady_clock::now()+10s;
+        while(peer.password_result()==SignalPeer::PasswordResult::Pending &&
+              !peer.status().revoked && std::chrono::steady_clock::now()<deadline)
+            std::this_thread::sleep_for(50ms);
+        if(peer.password_result()!=SignalPeer::PasswordResult::Accepted || peer.status().revoked) {
+            OPENSSL_cleanse(password.data(),password.size());
+            std::cerr << "Numeric password not confirmed by server; restart probe\n";
+            return EXIT_FAILURE;
+        }
+        const auto& id=status.device_id;
+        std::cout << "Temporary host ID: " << id
+                  << "\nID groups: " << (id.size()==9 ? id.substr(0,3)+" "+id.substr(3,3)+" "+id.substr(6,3) : id)
                   << "\nTemporary password: " << password
                   << "\nWaiting for viewer " << viewer << std::endl;
         OPENSSL_cleanse(password.data(), password.size());
         password.clear();
 
-        deadline = std::chrono::steady_clock::now() + 120s;
+        deadline = std::chrono::steady_clock::now() + 10min;
         while (!peer.status().viewer_connected && !peer.status().revoked &&
                std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(50ms);
@@ -73,7 +104,7 @@ int main(int argc, char** argv) {
             std::cerr << "Viewer not connected or admission revoked\n";
             return EXIT_FAILURE;
         }
-        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to 60 seconds?" : " to view the primary monitor for up to 60 seconds? No remote control.") + (clipboard ? "\nClipboard text will be shared in both directions after approval." : "") + (audio ? "\nSystem playback audio will be shared after approval (not microphone)." : "");
+        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to 15 minutes?" : " to view the primary monitor for up to 15 minutes? No remote control.") + (clipboard ? "\nClipboard text will be shared in both directions after approval." : "") + (audio ? "\nSystem playback audio will be shared after approval (not microphone)." : "");
         if (MessageBoxA(nullptr, prompt.c_str(), "ReDesk Host - view test",
             MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES ||
             !peer.approve_viewer()) return EXIT_FAILURE;
@@ -105,11 +136,12 @@ int main(int argc, char** argv) {
         if (audio) sound=std::make_unique<AudioProbe>();
         std::uint64_t audio_packets=0;
         bool audio_running_seen=false;
+        std::optional<bool> last_audio;
         capture.start();
         std::cout << (control ? "View and control enabled. " : "View-only. ")
-                  << "Press Esc to stop; timeout 60 seconds.\n";
+                  << "Press Esc to stop; timeout 15 minutes.\n";
         std::uint64_t last = 0, frames = 0;
-        deadline = std::chrono::steady_clock::now() + 60s;
+        deadline = std::chrono::steady_clock::now() + 15min;
         while (peer.view_active() && std::chrono::steady_clock::now() < deadline &&
                !(GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
             // This probe does not authorize lock-screen/UAC input or capture.
@@ -129,7 +161,13 @@ int main(int argc, char** argv) {
                     [&](const std::string& value) { return peer.send_clipboard(value); });
             }
             if (sound) {
-                sound->set_enabled(peer.audio_requested());
+                const bool requested=peer.audio_requested();
+                const bool synced=peer.sync_audio_state();
+                sound->set_enabled(requested && synced);
+                if (!last_audio || *last_audio != requested) {
+                    std::cout << "Viewer audio: " << (requested ? "enabled" : "muted") << "\n";
+                    last_audio=requested;
+                }
                 audio_running_seen |= sound->running();
                 for (const auto& packet:sound->take()) {
                     if (!peer.audio_requested() ||

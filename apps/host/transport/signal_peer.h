@@ -6,6 +6,7 @@
 #include <mutex>
 #include <deque>
 #include <optional>
+#include <preview_subscription.h>
 #include <vector>
 #include <string>
 
@@ -33,6 +34,10 @@ public:
     std::optional<std::string> take_clipboard();
     bool send_clipboard(const std::string& text);
     bool audio_requested() const;
+    bool sync_audio_state();
+    bool request_test_password(const std::string& password);
+    enum class PasswordResult { NotRequested, Pending, Accepted, Rejected };
+    PasswordResult password_result() const;
     bool send_audio(const char* data, std::size_t size);
     std::string take_registration_password();
     bool approve_viewer();
@@ -69,6 +74,9 @@ private:
     bool allow_clipboard_ = false;
     bool allow_audio_ = false;
     bool audio_requested_ = false;
+    std::optional<bool> applied_audio_;
+    std::optional<crossdesk::PreviewSubscription> preview_audio_;
+    PasswordResult password_result_ = PasswordResult::NotRequested;
     std::optional<std::string> clipboard_;
 };
 }

@@ -39,13 +39,23 @@ bool GuiRuntime::HasActiveSession() {
 
 void GuiRuntime::MuteRemoteAudio(const std::shared_ptr<RemoteSession>& props) {
   if (!props) return;
-  std::lock_guard delivery_lock(audio_delivery_mutex_);
-  props->audio_capture_button_pressed_ = false;
-  props->audio_allowed_ = false;
-  devices_.ClearAudio(props->remote_id_);
-  // Capable peers stop sending to this controller on the next subscription;
-  // old peers remain muted by the local receive gate above.
-  props->preview_needs_sync_ = true;
+  {
+    std::lock_guard delivery_lock(audio_delivery_mutex_);
+    props->audio_capture_button_pressed_ = false;
+    props->audio_allowed_ = false;
+    devices_.ClearAudio(props->remote_id_);
+    props->preview_needs_sync_ = true;
+  }
+  // Match UnmuteRemoteAudio for hosts without preview negotiation.
+  // Negotiated subscriptions remain authoritative on capable hosts.
+  if (!props->closing_ && props->peer_ && props->connection_established_) {
+    RemoteAction action{};
+    action.type = ControlType::audio_capture;
+    action.a = false;
+    const auto message = action.to_json();
+    MiniRtcSendReliableDataFrame(props->peer_, message.data(), message.size(),
+                                 props->control_data_label_.c_str());
+  }
 }
 
 void GuiRuntime::UnmuteRemoteAudio(const std::shared_ptr<RemoteSession>& props) {

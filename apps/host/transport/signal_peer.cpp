@@ -103,11 +103,22 @@ int SignalPeer::exchange(MiniRtcSignalExchangeStage stage, const char* data, siz
         if (!msg.is_object()) return -1;
         if (stage == MiniRtcSignalExchangeStage::IncomingMessage) {
             const auto type = msg.value("type", std::string{});
+            if (type == "change_password") {
+                std::lock_guard<std::mutex> lock(self.mutex_);
+                if (self.password_result_ == PasswordResult::Pending &&
+                    msg.value("request_id", std::string{}) == "redesk-host-probe-password" &&
+                    msg.value("user_id", std::string{}) == self.status_.device_id)
+                    self.password_result_ = msg.value("status", std::string{}) == "success"
+                        ? PasswordResult::Accepted : PasswordResult::Rejected;
+                return 0;
+            }
             if (type == "offer" || type == "user_join_transmission") {
                 std::lock_guard<std::mutex> lock(self.mutex_);
                 if (type != "user_join_transmission" || self.expected_viewer_.empty() ||
                     self.login_.Pending() || self.status_.state != MiniRtcSignalConnected ||
                     self.status_.revoked || self.join_seen_ ||
+                    self.password_result_ == PasswordResult::Pending ||
+                    self.password_result_ == PasswordResult::Rejected ||
                     msg.value("status", std::string{}) != "success" ||
                     msg.value("user_id", std::string{}) != self.expected_viewer_ ||
                     msg.value("transmission_id", std::string{}) != self.status_.device_id) {
@@ -244,13 +255,20 @@ void SignalPeer::receive_input(const char* data, size_t size, const char* id, si
         if (!self.approved_ || self.status_.revoked ||
             !self.status_.viewer_connected || self.status_.state != MiniRtcSignalConnected) return;
         if (audio_control) {
-            // Only the existing audio_capture boolean is actionable here.
+            // Only audio demand from existing wire messages is actionable here.
             // No automation, restart, file or other control RPC is accepted.
             if (!self.allow_audio_ || size > 1024) return;
             const auto msg = nlohmann::json::parse(data,data+size,nullptr,false);
-            if (msg.is_object() && msg.contains("type") && msg["type"] == 2 &&
-                msg.contains("audio_capture") && msg["audio_capture"].is_boolean())
+            if (const auto request = crossdesk::PreviewSubscription::Parse(msg)) {
+                if (!self.preview_audio_ || request->IsNewerThan(*self.preview_audio_)) {
+                    self.preview_audio_ = *request;
+                    self.audio_requested_ = request->audio;
+                }
+            } else if (!self.preview_audio_ && msg.is_object() &&
+                       msg.contains("type") && msg["type"] == 2 &&
+                       msg.contains("audio_capture") && msg["audio_capture"].is_boolean()) {
                 self.audio_requested_ = msg["audio_capture"].get<bool>();
+            }
             return;
         }
         if (!self.allow_input_) return;
@@ -315,5 +333,37 @@ bool SignalPeer::send_audio(const char* data, std::size_t size) {
     frame.captured_timestamp = now > 0 ? static_cast<uint64_t>(now) : 0;
     return MiniRtcSendAudioFrameToPeer(peer_, &frame, crossdesk::kAudioStream,
         expected_viewer_.data(), expected_viewer_.size()) == 0;
+}
+bool SignalPeer::sync_audio_state() {
+    if (!peer_ || !view_active() || !allow_audio_) return false;
+    const bool desired = audio_requested();
+    if (applied_audio_ && *applied_audio_ == desired) return true;
+    if (MiniRtcSetAudioSendPaused(peer_, expected_viewer_.data(),
+                                  expected_viewer_.size(), !desired) != 0) return false;
+    applied_audio_ = desired;
+    return true;
+}
+bool SignalPeer::request_test_password(const std::string& password) {
+    if (!peer_ || expected_viewer_.empty() || !login_id_.empty() ||
+        password.size() != 6 || !valid_id(password)) return false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (status_.state != MiniRtcSignalConnected || status_.revoked ||
+            join_seen_ || password_result_ != PasswordResult::NotRequested) return false;
+        password_result_ = PasswordResult::Pending;
+    }
+    auto message = nlohmann::json{{"type","change_password"},
+        {"request_id","redesk-host-probe-password"},{"new_password",password}}.dump();
+    const auto result = MiniRtcSendSignalMessage(peer_,message.data(),message.size());
+    OPENSSL_cleanse(message.data(),message.size());
+    if (result != 0) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        password_result_ = PasswordResult::Rejected;
+    }
+    return result == 0;
+}
+SignalPeer::PasswordResult SignalPeer::password_result() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return password_result_;
 }
 }
