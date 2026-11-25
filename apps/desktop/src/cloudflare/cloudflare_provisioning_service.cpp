@@ -409,7 +409,14 @@ BackendReview CloudflareProvisioningService::RetryHealth(
   // Health is public and independent of the token. Keep the account-level
   // evidence recorded during discovery, but never promote an unverified
   // Worker into the code-update path.
-  auto refreshed = WithHealthStatus(previous, CheckHealth(previous.worker_url));
+  BackendStatus health;
+  for (int attempt = 0; attempt < 6; ++attempt) {
+    health = CheckHealth(previous.worker_url);
+    if (health.redesk_health && (health.turn_configured ||
+        !previous.pending_turn_recovery)) break;
+    if (attempt < 5) std::this_thread::sleep_for(std::chrono::seconds(2));
+  }
+  auto refreshed = WithHealthStatus(previous, health);
   if (refreshed.redesk_health) {
     refreshed.explanation = refreshed.update_safe
         ? "ReDesk /health is healthy. Use Existing Backend is available; "
@@ -421,9 +428,8 @@ BackendReview CloudflareProvisioningService::RetryHealth(
     if (!IsUpdateAvailable(refreshed.worker_version))
       refreshed.explanation += " No newer bundled version is available.";
   } else {
-    const auto probe = CheckHealth(previous.worker_url);
     refreshed.explanation =
-        "ReDesk /health is unavailable: " + probe.diagnostic +
+        "ReDesk /health is unavailable: " + health.diagnostic +
         ". Use Existing and Update remain disabled. Confirm that the "
         "workers.dev URL is correct and the Worker route is enabled.";
   }
