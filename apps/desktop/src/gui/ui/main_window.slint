@@ -371,9 +371,9 @@ export component MainWindow inherits Window {
     preferred-width: root.minimum-window-width;
     preferred-height: root.minimum-window-height;
     min-width: root.minimum-window-width;
-    max-width: root.gallery-mode ? 16384px : root.minimum-window-width;
+    max-width: 16384px;
     min-height: root.minimum-window-height;
-    max-height: root.gallery-mode ? 16384px : root.minimum-window-height;
+    max-height: 16384px;
     no-frame: root.custom-titlebar;
     background: root.wayland-titlebar ? transparent : white;
     default-font-size: ImGuiFontStyle.base;
