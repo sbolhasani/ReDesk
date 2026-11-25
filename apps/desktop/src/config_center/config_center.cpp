@@ -169,7 +169,7 @@ int ConfigCenter::Load() {
       ini_->GetBoolValue(section_, "enable_autostart", enable_autostart_);
   enable_daemon_ = ini_->GetBoolValue(section_, "enable_daemon", enable_daemon_);
   enable_privacy_screen_.store(
-      ini_->GetBoolValue(section_, "enable_privacy_screen", true));
+      ini_->GetBoolValue(section_, "enable_privacy_screen", false));
   privacy_local_unlock_allowed_.store(
       ini_->GetBoolValue(section_, "privacy_local_unlock_allowed", true));
   lock_on_disconnect_.store(
