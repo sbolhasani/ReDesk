@@ -636,6 +636,45 @@ Result CloudflareProvisioningService::DiscardOrphanTurnRecovery(
 #endif
 }
 
+Result CloudflareProvisioningService::DeleteOrphanTurnKey(
+    const std::string& token, const std::string& account) const {
+  if (!IsHex32(account) || token.empty())
+    return {false, "Valid Account ID and API token are required"};
+  const auto verified = ValidateToken(token, account);
+  if (!verified.ok) return verified;
+  const auto worker = Inspect(token, account);
+  if (worker.worker_exists || worker.diagnostic != "Worker does not exist")
+    return {false, "Cannot delete TURN key until ReDesk Worker absence is verified"};
+  if (HasPendingTurnRecovery(account))
+    return {false, "Local TURN recovery exists. Reconcile local state first; no key was deleted"};
+  auto client = Client(kApi);
+  const std::string path = "/client/v4/accounts/" + account + "/calls/turn_keys";
+  Json keys;
+  auto listed = Decode(client.Get(path, Authorization(token)), &keys);
+  if (!listed.ok || !keys.is_array())
+    return {false, "Cannot safely enumerate Cloudflare TURN keys"};
+  std::string uid;
+  for (const auto& key : keys) {
+    if (!key.is_object() || key.value("name", "") != "redesk-signal")
+      continue;
+    const auto candidate = key.value("uid", "");
+    if (!IsHex32(candidate) || !uid.empty())
+      return {false, "Multiple or invalid ReDesk TURN keys found. Nothing was deleted"};
+    uid = candidate;
+  }
+  if (uid.empty())
+    return {false, "ReDesk TURN key is no longer present. Check again before installing"};
+  // Re-read the exact key before deleting; a display name alone is not
+  // sufficient authority for a destructive request.
+  Json current;
+  auto checked = Decode(client.Get(path + "/" + uid, Authorization(token)), &current);
+  if (!checked.ok || !current.is_object() ||
+      current.value("uid", "") != uid ||
+      current.value("name", "") != "redesk-signal")
+    return {false, "TURN key identity changed before deletion; nothing was deleted"};
+  return Decode(client.Delete(path + "/" + uid, Authorization(token)));
+}
+
 Result CloudflareProvisioningService::ConfigureExisting(
     const SetupOptions& options, std::string* signal_address) const {
   if (options.existing_action != ExistingAction::UseExisting)
