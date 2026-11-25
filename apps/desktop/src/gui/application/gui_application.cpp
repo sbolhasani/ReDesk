@@ -3240,6 +3240,10 @@ void GuiApplication::Tick() {
       window->set_server_setup_error("");
     } else if (!result.ok) {
       if (result.reconcile_kind != 0) {
+        // This is an actionable confirmation, not the preceding install
+        // error. The confirmation view explains the proposed changes.
+        window->set_server_setup_error("");
+        window->set_server_setup_status("");
         window->set_server_setup_reconcile_kind(result.reconcile_kind);
       } else {
         window->set_server_setup_reconcile_kind(0);
