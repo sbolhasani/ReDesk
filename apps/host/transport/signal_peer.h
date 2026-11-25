@@ -5,6 +5,7 @@
 #include <minirtc.h>
 #include <mutex>
 #include <deque>
+#include <optional>
 #include <vector>
 #include <string>
 
@@ -26,9 +27,11 @@ public:
     ~SignalPeer();
     // Before start(), restrict a temporary registration to a specific desktop
     // viewer identity. Only one join is accepted in this peer's lifetime.
-    void enable_view_probe(std::string viewer_id, bool allow_input = false);
+    void enable_view_probe(std::string viewer_id, bool allow_input = false, bool allow_clipboard = false);
     struct InputMessage { std::string stream, payload; };
     std::vector<InputMessage> take_input();
+    std::optional<std::string> take_clipboard();
+    bool send_clipboard(const std::string& text);
     std::string take_registration_password();
     bool approve_viewer();
     bool send_host_info(const std::string& message);
@@ -61,5 +64,7 @@ private:
     bool approved_ = false;
     bool allow_input_ = false;
     std::deque<InputMessage> input_;
+    bool allow_clipboard_ = false;
+    std::optional<std::string> clipboard_;
 };
 }

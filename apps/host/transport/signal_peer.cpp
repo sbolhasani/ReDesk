@@ -86,6 +86,7 @@ void SignalPeer::stop() noexcept {
         status_.revoked = true;
         status_.viewer_connected = false;
         input_.clear();
+        clipboard_.reset();
     }
     if (peer_) MiniRtcDestroyPeer(&peer_);
 }
@@ -188,12 +189,13 @@ void SignalPeer::net_status(const char*, size_t, MiniRtcTraversalMode, const Min
                              const char*, size_t, void*) noexcept {
     // The initial report may carry ID@password. Do not log or expose it.
 }
-void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input) {
+void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input, bool allow_clipboard) {
     if (started_ || !login_id_.empty() || viewer_id.rfind("C-",0) != 0 ||
         viewer_id.size() <= 2 || !valid_id(std::string_view(viewer_id).substr(2)))
         throw std::invalid_argument("Expected C-<viewer numeric ID> for a fresh test registration");
     expected_viewer_ = std::move(viewer_id);
     allow_input_ = allow_input;
+    allow_clipboard_ = allow_input && allow_clipboard;
     if (allow_input_) params_.on_receive_data_buffer = receive_input;
 }
 std::string SignalPeer::take_registration_password() {
@@ -228,15 +230,21 @@ bool SignalPeer::send_frame(const MiniRtcVideoFrame& frame) {
 void SignalPeer::receive_input(const char* data, size_t size, const char* id, size_t id_size,
                                const char* source, size_t source_size, void* context) noexcept {
     try {
-        if (!context || !data || !id || !source || !size || size > 32768) return;
+        if (!context || !data || !id || !source || !size || size > crossdesk::kMaxClipboardBytes) return;
         auto& self = *static_cast<SignalPeer*>(context);
         if (id_size != self.expected_viewer_.size() ||
             std::string_view(id,id_size) != self.expected_viewer_) return;
         const std::string_view stream(source, source_size);
-        if (stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream) return;
+        const bool clip = stream == crossdesk::kClipboardStream;
+        if (!clip && (size > 32768 || (stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream))) return;
         std::lock_guard<std::mutex> lock(self.mutex_);
         if (!self.allow_input_ || !self.approved_ || self.status_.revoked ||
             !self.status_.viewer_connected || self.status_.state != MiniRtcSignalConnected) return;
+        if (clip) {
+            if (self.allow_clipboard_ && !std::memchr(data, '\0', size))
+                self.clipboard_ = std::string(data, size);
+            return;
+        }
         if (self.input_.size() >= 128) {
             // Fail closed on overload; the owner releases held input.
             self.approved_ = false;
@@ -263,5 +271,20 @@ std::vector<SignalPeer::InputMessage> SignalPeer::take_input() {
         input_.clear();
     }
     return result;
+}
+std::optional<std::string> SignalPeer::take_clipboard() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!allow_clipboard_ || !approved_ || status_.revoked || !status_.viewer_connected ||
+        status_.state != MiniRtcSignalConnected) {
+        clipboard_.reset();
+        return std::nullopt;
+    }
+    return std::exchange(clipboard_, std::nullopt);
+}
+bool SignalPeer::send_clipboard(const std::string& text) {
+    if (!allow_clipboard_ || !peer_ || !view_active() || text.empty() ||
+        text.size() > crossdesk::kMaxClipboardBytes || text.find('\0') != std::string::npos) return false;
+    return MiniRtcSendReliableDataFrameToPeer(peer_, text.data(), text.size(),
+        crossdesk::kClipboardStream, expected_viewer_.data(), expected_viewer_.size()) == 0;
 }
 }

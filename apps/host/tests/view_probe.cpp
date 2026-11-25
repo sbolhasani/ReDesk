@@ -1,6 +1,7 @@
 #include "signal_peer.h"
 #include "capture_source.h"
 #include "input_probe_controller.h"
+#include "clipboard_probe.h"
 #include "interactive_desktop.h"
 #include <memory>
 #include <string_view>
@@ -16,9 +17,10 @@ using namespace redesk::host;
 using namespace redesk::host::windows;
 using namespace std::chrono_literals;
 int main(int argc, char** argv) {
-    const bool control = argc == 4 && std::string_view(argv[3]) == "--control";
-    if (argc != 3 && !control) {
-        std::cout << "Usage: redesk-host-view-probe wss://server/signal VIEWER_NUMERIC_ID [--control]\n"
+    const bool control = argc >= 4 && std::string_view(argv[3]) == "--control";
+    const bool clipboard = argc == 5 && control && std::string_view(argv[4]) == "--clipboard";
+    if (argc != 3 && !(argc == 4 && control) && !clipboard) {
+        std::cout << "Usage: redesk-host-view-probe wss://server/signal VIEWER_NUMERIC_ID [--control [--clipboard]]\n"
                      "Temporary registration, one approved viewer, primary display only.\n";
         return argc == 1 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
@@ -33,7 +35,7 @@ int main(int argc, char** argv) {
         capture.initialize(15);
         SignalPeer peer(argv[1], "", "", DeviceKey::generate());
         const std::string viewer = std::string("C-") + argv[2];
-        peer.enable_view_probe(viewer,control);
+        peer.enable_view_probe(viewer,control,clipboard);
         peer.start();
         auto deadline = std::chrono::steady_clock::now() + 30s;
         while (peer.status().state != MiniRtcSignalConnected &&
@@ -63,7 +65,7 @@ int main(int argc, char** argv) {
             std::cerr << "Viewer not connected or admission revoked\n";
             return EXIT_FAILURE;
         }
-        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to 60 seconds?" : " to view the primary monitor for up to 60 seconds? No remote control.");
+        const auto prompt = "Allow " + viewer + (control ? " to view and control the primary desktop for up to 60 seconds?" : " to view the primary monitor for up to 60 seconds? No remote control.") + (clipboard ? "\nClipboard text will be shared in both directions after approval." : "");
         if (MessageBoxA(nullptr, prompt.c_str(), "ReDesk Host - view test",
             MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES ||
             !peer.approve_viewer()) return EXIT_FAILURE;
@@ -89,6 +91,8 @@ int main(int argc, char** argv) {
         }
         std::unique_ptr<InputProbeController> input;
         if (control) input = std::make_unique<InputProbeController>(d);
+        std::unique_ptr<ClipboardProbe> clip;
+        if (clipboard) clip = std::make_unique<ClipboardProbe>();
         capture.start();
         std::cout << (control ? "View and control enabled. " : "View-only. ")
                   << "Press Esc to stop; timeout 60 seconds.\n";
@@ -105,6 +109,12 @@ int main(int argc, char** argv) {
                     if (!input->apply(event.stream,event.payload)) { ok=false; break; }
                 }
                 if (!ok || !input->tick()) break;
+            }
+            if (clip && peer.view_active()) {
+                if (auto value=peer.take_clipboard()) clip->receive(std::move(*value));
+                clip->tick([&] { return peer.view_active() &&
+                    crossdesk::IsCurrentSessionUserDesktopActive(); },
+                    [&](const std::string& value) { return peer.send_clipboard(value); });
             }
             auto latest = capture.latest();
             if (latest.pixels && latest.stream == "Display1" && latest.sequence != last) {
@@ -129,6 +139,7 @@ int main(int argc, char** argv) {
                 std::this_thread::sleep_for(100ms);
             }
             if (!released) std::cerr << "Warning: remote input cleanup incomplete\n";
+            else std::cout << "Remote input cleanup passed (native release calls accepted)\n";
         }
         std::cout << "Frames submitted (not delivery confirmation): " << frames << "\n";
         return frames && released ? EXIT_SUCCESS : EXIT_FAILURE;
