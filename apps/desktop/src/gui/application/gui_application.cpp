@@ -37,6 +37,8 @@
 #include <vector>
 
 #include "crossdesk_ui.h"
+#include "cloudflare/cloudflare_provisioning_service.h"
+#include "cloudflare/bundled_worker.h"
 #include "fa_solid_900.h"
 #include "features/about/about_catalog.h"
 #include "features/feedback/diagnostic_export.h"
@@ -503,10 +505,30 @@ std::optional<int> ParsePort(const slint::SharedString& text) {
   return port;
 }
 
-std::string ConnectionStatusText(MiniRtcConnectionStatus status, int language) {
+// Use the nominated ICE route, not the Force Relay checkbox, when reporting
+// whether a connection is direct or relayed. MiniRTC's traversal callback
+// does not expose the selected TURN server transport in Auto mode.
+std::string ConnectedPathText(MiniRtcTraversalMode route,
+                              MiniRtcTurnMode configured_turn, int language) {
+  if (route == MiniRtcTraversalMode::MiniRtcTraversalP2P)
+    return localization::Literal("P2P 直连已建立", language);
+  if (route == MiniRtcTraversalMode::MiniRtcTraversalRelay) {
+    if (configured_turn == MiniRtcTurnMode::MiniRtcTurnForceUdp)
+      return localization::Literal("已通过 UDP 中继连接", language);
+    if (configured_turn == MiniRtcTurnMode::MiniRtcTurnForceTcp)
+      return localization::Literal("已通过 TCP 中继连接", language);
+    return localization::Literal("中继连接已建立", language);
+  }
+  return localization::Literal("连接已建立，正在确认路径", language);
+}
+
+std::string ConnectionStatusText(
+    MiniRtcConnectionStatus status, int language,
+    MiniRtcTraversalMode route = MiniRtcTraversalMode::MiniRtcTraversalUnknown,
+    MiniRtcTurnMode configured_turn = MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp) {
   switch (status) {
     case MiniRtcConnectionStatus::MiniRtcConnectionConnected:
-      return localization::p2p_connected[language];
+      return ConnectedPathText(route, configured_turn, language);
     case MiniRtcConnectionStatus::MiniRtcConnectionConnecting:
       return localization::p2p_connecting[language];
     case MiniRtcConnectionStatus::MiniRtcConnectionGathering:
@@ -989,6 +1011,36 @@ void DragWindow(WindowHandle& component, int phase, float mouse_x,
 }  // namespace
 
 struct GuiApplication::SlintUi {
+  struct ServerSetupResult {
+    bool ok = false;
+    bool token_validation = false;
+    std::string endpoint;
+    std::string message;
+    bool review_ready = false;
+    bool needs_account_id = false;
+    bool needs_worker_url = false;
+    bool discovery_attempt = false;
+    bool health_retry = false;
+    bool worker_version_probe = false;
+    bool turn_recovery_completion = false;
+    bool setup_retry_attempt = false;
+    // 0=none; 1=orphaned encrypted local recovery; 2=orphaned Cloudflare TURN key.
+    int reconcile_kind = 0;
+    // 0 = no setup completion, 1 = install, 2 = TURN recovery, 3 = update.
+    int setup_completion_kind = 0;
+    std::string discovered_account_id;
+    std::string suggested_worker_url;
+    // Used only for discarding stale read-only fetch responses when the user
+    // edits the token while a request is in progress; not logged or persisted.
+    std::string requested_token;
+    cloudflare::BackendReview review;
+  };
+  std::future<ServerSetupResult> server_setup_future;
+  bool server_setup_gallery_window = false;
+  // A short-lived in-memory token for the explicit review/confirmation step.
+  // It is never stored in INI/identity files and is cleared on cancel/finish.
+  std::string server_setup_pending_token;
+  cloudflare::BackendReview server_setup_review;
 #if _WIN32
   SessionEndObserver session_end;
 #endif
@@ -1178,6 +1230,12 @@ int GuiApplication::Run() {
   if (!path_manager_) {
     return -1;
   }
+#if defined(_WIN32) && CROSSDESK_PORTABLE
+  if (!path_manager_->CreateDirectories(path_manager_->GetCachePath()) ||
+      !path_manager_->CreateDirectories(path_manager_->GetLogPath())) {
+    return -1;
+  }
+#endif
   exec_log_path_ = path_manager_->GetLogPath().string();
   dll_log_path_ = exec_log_path_;
   InitializeLogger();
@@ -1188,6 +1246,8 @@ int GuiApplication::Run() {
   announcements_.SetStorageDirectory(path_manager_->GetCachePath() /
                                      "announcement_reads");
   config_center_ = std::make_unique<ConfigCenter>(cache_path_ + "/config.ini");
+  LOG_INFO("ReDesk GUI language preference: {}",
+           static_cast<int>(config_center_->GetLanguage()));
 #ifdef _WIN32
   if (SupportsServiceAutostart() && SharedHostIdentity::Configured()) {
     // User-session features attach after unlock; the persistent host keeps
@@ -1409,8 +1469,6 @@ void GuiApplication::InitializeUi() {
 #if _WIN32
   ui_->session_end.Start();
 #endif
-  ui_->sponsorship_prompt_pending =
-      config_center_->GetSponsorshipPromptDismissedVersion() != CROSSDESK_VERSION;
   ui_->video_presenter =
       std::make_unique<SlintVideoPresenter>(*video_renderer_);
 #if _WIN32
@@ -1456,6 +1514,15 @@ void GuiApplication::InitializeUi() {
           saved.value("height", int(default_gallery_size.height)), 486, 4320);
       ui_->gallery_window.wall_size =
           slint::LogicalSize(slint::Size<float>{float(width), float(height)});
+      // Older settings did not store a connection-window size. Their default
+      // remains the minimum; new settings restore the user's last size.
+      const int connection_width = std::clamp(
+          saved.value("connection_width", 640), 640, 7680);
+      const int connection_height = std::clamp(
+          saved.value("connection_height", 503), 503, 4320);
+      ui_->connection_window.connection_size =
+          slint::LogicalSize(slint::Size<float>{
+              float(connection_width), float(connection_height)});
       ui_->gallery_window.wall_fullscreen = saved.value("fullscreen", false);
       ui_->gallery_window.wall_maximized = saved.value("maximized", false);
 #if defined(__APPLE__)
@@ -1489,6 +1556,10 @@ void GuiApplication::InitializeUi() {
   }
   ResetSettingsUi();
   ResetSettingsUi(true);
+  ui_->main->set_server_setup_open(!config_center_->IsServerSelectionCompleted());
+  ui_->main->set_server_setup_cloudflare_configured(
+      config_center_->GetServerProvider() == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE);
+  ui_->main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
   BindMainCallbacks();
   BindMainCallbacks(true);
   InitializeSystemTray();
@@ -1594,6 +1665,31 @@ void GuiApplication::ResetSettingsUi(bool gallery_window) {
     return;
   }
   auto& main = ui_->Window(gallery_window);
+  const auto configured_provider = config_center_->GetServerProvider();
+  main->set_server_setup_cloudflare_configured(
+      configured_provider == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE);
+  main->set_server_setup_provider(static_cast<int32_t>(configured_provider));
+  main->set_configured_server_provider(static_cast<int32_t>(configured_provider));
+  main->set_configured_server_host(config_center_->GetSignalServerHost().c_str());
+  std::string server_display;
+  if (configured_provider == ConfigCenter::SERVER_PROVIDER::PUBLIC) {
+    // A public selection deliberately retains the previous custom endpoint
+    // in the config for later reuse; do not mislabel it as the active server.
+    server_display = "CrossDesk public signaling service";
+  } else if (configured_provider == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE) {
+    server_display = "https://" + config_center_->GetSignalServerHost();
+    if (server_display.size() >= 7 &&
+        server_display.ends_with("/signal"))
+      server_display.resize(server_display.size() - 7);
+  } else {
+    server_display = config_center_->GetSignalServerHost();
+    const int port = config_center_->GetSignalServerPort();
+    if (port > 0)
+      server_display += ":" + std::to_string(port);
+  }
+  main->set_configured_server_display(server_display.c_str());
+  main->set_configured_server_copied(false);
+  main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
   main->set_language_index(language_button_value_);
   main->set_codec_index(video_encode_format_button_value_);
   main->set_ip_direct_enabled_draft(config_center_->IsIpDirectEnabled());
@@ -1616,7 +1712,10 @@ void GuiApplication::ResetSettingsUi(bool gallery_window) {
     main->set_settings_save_error(
         main->global<ui::LanStrings>().invoke_error_message(UiText(error.what())));
   }
-  main->set_force_relay_enabled(config_center_->IsForceRelay());
+  const auto configured_turn = config_center_->GetTurnMode();
+  main->set_turn_mode_index(
+      configured_turn == ConfigCenter::TURN_MODE::FORCE_TCP ? 2 :
+      configured_turn == ConfigCenter::TURN_MODE::FORCE_UDP ? 1 : 0);
   main->set_self_hosted_enabled(enable_self_hosted_);
 #ifdef _WIN32
   // The machine setting can also be changed by the CLI or another admin.
@@ -1805,6 +1904,42 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     if (main->get_gallery_mode()) CloseGalleryWindow();
     else MinimizeMainWindowToTray();
     main->hide();
+  });
+  main->on_request_application_exit([this, main] {
+    if (!ui_) return;
+    // Includes LAN, incoming controllers and outgoing remote sessions.
+    // With no active session, Exit is immediate and never minimizes to tray.
+    if (HasActiveSession()) {
+      main->set_exit_confirm_open(true);
+    } else {
+      exit_ = true;
+    }
+  });
+  main->on_confirm_application_exit([this] {
+    // The user explicitly approved disconnecting any active sessions.
+    // Tick() performs the normal graceful shutdown and releases the tray.
+    exit_ = true;
+  });
+  main->on_copy_configured_server_address([this] {
+    if (!ui_ || config_center_->GetServerProvider() ==
+                    ConfigCenter::SERVER_PROVIDER::PUBLIC)
+      return false;
+    std::string display;
+    const auto provider = config_center_->GetServerProvider();
+    if (provider == ConfigCenter::SERVER_PROVIDER::CLOUDFLARE) {
+      display = "https://" + config_center_->GetSignalServerHost();
+      if (display.ends_with("/signal"))
+        display.resize(display.size() - 7);
+    } else {
+      display = config_center_->GetSignalServerHost();
+      const int port = config_center_->GetSignalServerPort();
+      if (port > 0) display += ":" + std::to_string(port);
+    }
+    if (display.empty() || !SDL_SetClipboardText(display.c_str())) {
+      LOG_WARN("Could not copy configured signaling server to clipboard");
+      return false;
+    }
+    return true;
   });
   main->on_copy_local_id([this] {
     if (!SDL_SetClipboardText(client_id_)) {
@@ -2012,6 +2147,459 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
 #if defined(__OHOS__)
   main->on_refresh_autostart_status([] { RefreshHarmonyAutostartStatus(); });
 #endif
+  main->on_server_setup_close([this] {
+    ui_->server_setup_pending_token.clear();
+    ui_->server_setup_review = {};
+  });
+  main->on_server_setup_manage_worker([this, main] {
+    if (config_center_->GetServerProvider() != ConfigCenter::SERVER_PROVIDER::CLOUDFLARE) {
+      main->set_server_setup_error("Cloudflare is not the configured signaling provider.");
+      return;
+    }
+    if (ui_->server_setup_future.valid()) {
+      main->set_server_setup_error("A Cloudflare operation is still running.");
+      return;
+    }
+    const std::string configured(config_center_->GetSignalServerHost());
+    std::string worker_url;
+    if (!cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+            "https://" + configured, &worker_url, nullptr)) {
+      main->set_server_setup_error("Configured Cloudflare Worker address is invalid.");
+      return;
+    }
+    main->set_server_setup_provider(1);
+    main->set_server_setup_cloudflare_method(1);
+    main->set_server_setup_postconnect(true);
+    main->set_server_setup_page(1);
+    main->set_server_setup_review_open(false);
+    main->set_server_setup_confirm_update(false);
+    main->set_server_setup_need_account(false);
+    main->set_server_setup_need_worker_url(false);
+    main->set_server_setup_host(worker_url.c_str());
+    main->set_server_setup_account("");
+    main->set_server_setup_token("");
+    main->set_server_setup_reveal_token(false);
+    main->set_server_setup_deployed_version("Checking...");
+    main->set_server_setup_bundled_version(cloudflare::kReDeskWorkerVersion);
+    main->set_server_setup_error("");
+    main->set_server_setup_status("Checking installed Worker version...");
+    main->set_server_setup_busy(true);
+    main->set_server_setup_open(true);
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    ui_->server_setup_future = std::async(std::launch::async, [worker_url] {
+      const auto status = cloudflare::CloudflareProvisioningService{}.CheckHealth(worker_url);
+      SlintUi::ServerSetupResult result;
+      result.worker_version_probe = true;
+      result.ok = status.redesk_health;
+      result.message = status.diagnostic;
+      result.review.worker_version = status.worker_version;
+      return result;
+    });
+  });
+  main->on_server_setup_retry_health([this, main] {
+    if (ui_->server_setup_future.valid() || main->get_server_setup_busy()) {
+      main->set_server_setup_error("Another Cloudflare operation is still running.");
+      return;
+    }
+    if (!main->get_server_setup_review_open() ||
+        !ui_->server_setup_review.ok ||
+        ui_->server_setup_review.worker_url.empty()) {
+      main->set_server_setup_error("No Worker is available to check.");
+      return;
+    }
+    const auto previous = ui_->server_setup_review;
+    main->set_server_setup_busy(true);
+    main->set_server_setup_error("");
+    main->set_server_setup_status("Checking ReDesk Worker /health...");
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    ui_->server_setup_future = std::async(std::launch::async, [previous] {
+      SlintUi::ServerSetupResult response;
+      response.health_retry = true;
+      response.review = cloudflare::CloudflareProvisioningService{}.RetryHealth(previous);
+      response.ok = response.review.redesk_health;
+      response.message = response.review.explanation;
+      return response;
+    });
+  });
+  main->on_server_setup_decision([this, main](int32_t action) {
+    if (ui_->server_setup_future.valid()) {
+      main->set_server_setup_error("Another Cloudflare operation is still running.");
+      return;
+    }
+    const auto review = ui_->server_setup_review;
+    if (!review.ok || ui_->server_setup_pending_token.empty()) {
+      main->set_server_setup_error("Review has expired. Validate the token again.");
+      return;
+    }
+    if (action == 4) {
+      const int kind = main->get_server_setup_reconcile_kind();
+      if (!main->get_server_setup_retry_available() ||
+          (kind != 1 && kind != 2) || HasActiveSession()) {
+        main->set_server_setup_error("No confirmed reconciliation is available.");
+        return;
+      }
+      const std::string token = ui_->server_setup_pending_token;
+      main->set_server_setup_reconcile_kind(0);
+      main->set_server_setup_busy(true);
+      main->set_server_setup_error("");
+      main->set_server_setup_status("Reconciling verified incomplete TURN setup...");
+      ui_->server_setup_gallery_window = main->get_gallery_mode();
+      ui_->server_setup_future = std::async(std::launch::async,
+          [token, review, kind] {
+        cloudflare::CloudflareProvisioningService service;
+        SlintUi::ServerSetupResult result;
+        result.setup_retry_attempt = true;
+        result.setup_completion_kind = 1;
+        const auto cleanup = kind == 1
+            ? service.DiscardOrphanTurnRecovery(token, review.account_id)
+            : service.DeleteOrphanTurnKey(token, review.account_id);
+        if (!cleanup.ok) {
+          result.message = "Reconciliation stopped: " + cleanup.error;
+          return result;
+        }
+        std::string url = review.worker_url;
+        const auto installed = service.ProvisionNew(
+            token, review.account_id, cloudflare::kReDeskSignalingWorker, &url);
+        result.ok = installed.ok;
+        result.message = installed.error;
+        if (result.ok &&
+            !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+                url, nullptr, &result.endpoint)) {
+          result.ok = false;
+          result.message = "Worker URL invalid after reconciliation";
+        }
+        if (!result.ok)
+          result.message = "Reconciliation completed; setup is still incomplete: " +
+                           result.message + ". Retry will recheck Cloudflare.";
+        return result;
+      });
+      return;
+    }
+    if (action == 3) {
+      // Retry is an independent read-only preflight followed by the safe
+      // new-install/recovery path. Never re-use a stale review to mutate
+      // Cloudflare or create duplicate TURN keys.
+      if (!main->get_server_setup_retry_available() || HasActiveSession()) {
+        main->set_server_setup_error(
+            "Retry is unavailable while a session is active or no setup failed.");
+        return;
+      }
+      const std::string token = ui_->server_setup_pending_token;
+      main->set_server_setup_busy(true);
+      main->set_server_setup_error("");
+      main->set_server_setup_status(
+          "Rechecking Worker, TURN keys and encrypted recovery before retry...");
+      ui_->server_setup_gallery_window = main->get_gallery_mode();
+      ui_->server_setup_future = std::async(std::launch::async,
+          [token, review] {
+        cloudflare::CloudflareProvisioningService service;
+        SlintUi::ServerSetupResult result;
+        result.setup_retry_attempt = true;
+        const auto refreshed = service.ReviewAccount(
+            token, review.account_id, review.worker_url);
+        if (!refreshed.ok) {
+          result.message = "Retry preflight failed: " + refreshed.explanation;
+          return result;
+        }
+        if (refreshed.worker_exists && refreshed.redesk_health &&
+            refreshed.turn_configured) {
+          // A previous operation may have completed on Cloudflare even when
+          // the final health request failed locally.
+          result.ok = cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+              refreshed.worker_url, nullptr, &result.endpoint);
+          // A previously completed first-time install is not a TURN recovery.
+          result.setup_completion_kind = review.pending_turn_recovery ? 2 : 1;
+          if (!result.ok) result.message = "Verified Worker has an invalid URL";
+          return result;
+        }
+        const bool fresh_install = !refreshed.worker_exists &&
+            refreshed.turn_keys_checked && !refreshed.existing_turn_key;
+        const bool pending_recovery = refreshed.pending_turn_recovery;
+        if (!refreshed.worker_exists && refreshed.turn_keys_checked &&
+            !refreshed.existing_turn_key &&
+            cloudflare::CloudflareProvisioningService::HasPendingTurnRecovery(
+                review.account_id)) {
+          result.reconcile_kind = 1;
+          result.message = "The encrypted TURN recovery file exists locally, "
+              "but its key is absent from Cloudflare. Confirm removal of ONLY "
+              "the orphaned local recovery file, followed by a fresh install.";
+          return result;
+        }
+        if (!refreshed.worker_exists && refreshed.turn_keys_checked &&
+            refreshed.existing_turn_key && !pending_recovery) {
+          result.reconcile_kind = 2;
+          result.message = "A ReDesk TURN key exists in Cloudflare, but its "
+              "secret cannot be recovered. Confirm deleting ONLY the orphaned "
+              "ReDesk TURN key and recreating it. This revokes any clients "
+              "using the old key. No Worker or Durable Object will be deleted.";
+          return result;
+        }
+        if (!fresh_install && !pending_recovery) {
+          result.message = "Retry cannot safely continue: " +
+              refreshed.explanation +
+              " No Worker, Durable Object or TURN key was overwritten. "
+              "Check the Worker URL or token permissions before retrying.";
+          return result;
+        }
+        std::string url = refreshed.worker_url;
+        const auto installed = service.ProvisionNew(
+            token, refreshed.account_id,
+            cloudflare::kReDeskSignalingWorker, &url);
+        result.ok = installed.ok;
+        result.message = installed.error;
+        result.setup_completion_kind = pending_recovery ? 2 : 1;
+        if (result.ok &&
+            !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+                url, nullptr, &result.endpoint)) {
+          result.ok = false;
+          result.message = "Invalid Worker URL returned after retry";
+        }
+        return result;
+      });
+      return;
+    }
+    if (action == 0) {
+      if (HasActiveSession()) {
+        main->set_server_setup_error(
+            "Disconnect incoming and outgoing sessions before changing the signaling server.");
+        return;
+      }
+      if (!review.worker_exists || !review.redesk_health) {
+        main->set_server_setup_error("Existing Worker health has not been verified.");
+        return;
+      }
+      std::string endpoint;
+      if (!cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+              review.worker_url, nullptr, &endpoint) ||
+          config_center_->SelectServer(ConfigCenter::SERVER_PROVIDER::CLOUDFLARE,
+                                       endpoint, 443) != 0) {
+        main->set_server_setup_error("Cannot save existing Worker configuration.");
+        return;
+      }
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
+      main->set_server_setup_cloudflare_configured(true);
+      main->set_server_setup_review_open(false);
+      main->set_server_setup_success_url(review.worker_url.c_str());
+      main->set_server_setup_success_kind(4);
+      main->set_server_setup_error("");
+      main->set_server_setup_status("");
+      ApplySettingsFromConfig(true);
+      return;
+    }
+    if (action != 1 && action != 2) return;
+    if (action == 1 &&
+        !(review.pending_turn_recovery ||
+          (!review.worker_exists && review.turn_keys_checked &&
+           !review.existing_turn_key))) {
+      main->set_server_setup_error(
+          "Install requires verified Worker absence and TURN key access, "
+          "or a matching locally recoverable pending TURN key.");
+      return;
+    }
+    if (action == 2 && (!review.worker_exists || !review.update_safe)) {
+      main->set_server_setup_error("Worker update blocked by compatibility or version checks.");
+      return;
+    }
+    if ((action == 1 || action == 2) && HasActiveSession()) {
+      main->set_server_setup_error(
+          "Disconnect active remote sessions before updating the Worker.");
+      return;
+    }
+    const std::string token = ui_->server_setup_pending_token;
+    // Keep the token and verified account in memory for Retry Setup.
+    // They are cleared only on Finish, Cancel, or a successful completion.
+    main->set_server_setup_retry_available(false);
+    main->set_server_setup_busy(true);
+    main->set_server_setup_status(action == 1
+        ? "Installing Cloudflare Worker and TURN..."
+        : "Updating Worker code (preserving data)...");
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    ui_->server_setup_future = std::async(std::launch::async,
+        [token, review, action] {
+      cloudflare::CloudflareProvisioningService service;
+      std::string url = review.worker_url;
+      cloudflare::Result result;
+      if (action == 1) {
+        result = service.ProvisionNew(token, review.account_id,
+             cloudflare::kReDeskSignalingWorker, &url);
+      } else {
+        cloudflare::SetupOptions options;
+        options.account_id = review.account_id;
+        options.worker_url = review.worker_url;
+        options.existing_action = cloudflare::ExistingAction::UpdateCode;
+        options.confirmed_worker_update = true;
+        result = service.Deploy(token, options,
+                                cloudflare::kReDeskSignalingWorker);
+      }
+      std::string endpoint;
+      if (result.ok &&
+          !cloudflare::CloudflareProvisioningService::NormalizeWorkerUrl(
+              url, nullptr, &endpoint)) {
+        result = {false, "Invalid Worker URL after deployment"};
+      }
+      SlintUi::ServerSetupResult response;
+      response.ok = result.ok;
+      response.endpoint = std::move(endpoint);
+      response.message = result.error;
+      response.turn_recovery_completion = action == 1 && review.pending_turn_recovery;
+      response.setup_completion_kind = action == 2 ? 3 :
+          (review.pending_turn_recovery ? 2 : 1);
+      return response;
+    });
+  });
+  main->on_server_setup_create_token([this] {
+    // Match Get-TokenTemplateUrl("Full") in
+    // cloudflare/signal/setup-redesk-cloudflare.ps1. Cloudflare still requires
+    // the user to review and approve the selected permission groups.
+    constexpr const char* kTokenTemplate =
+        "https://dash.cloudflare.com/?to=/:account/api-tokens"
+        "&permissionGroupKeys=%5B%7B%22key%22%3A%22b711942448db4b0aace44d1312f9fdb0%22%2C%22type%22%3A%22edit%22%7D%2C"
+        "%7B%22key%22%3A%22e086da7e2179491d91ee5f35b3ca210a%22%2C%22type%22%3A%22edit%22%7D%2C"
+        "%7B%22key%22%3A%22c1fde68c7bcc44588cbb6ddbc16d6480%22%2C%22type%22%3A%22read%22%7D%5D"
+        "&name=ReDesk%20Backend%20Setup";
+    OpenUrl(kTokenTemplate);
+  });
+  main->on_server_setup_validate_token([this, main](slint::SharedString token) {
+    if (ui_->server_setup_future.valid()) {
+      main->set_server_setup_error("Another Cloudflare operation is still running.");
+      return;
+    }
+    const std::string submitted(token);
+    if (submitted.empty()) {
+      main->set_server_setup_error("Enter your Cloudflare API token.");
+      return;
+    }
+    main->set_server_setup_error("");
+    main->set_server_setup_status("Fetching Cloudflare account and backend information...");
+    main->set_server_setup_busy(true);
+    ui_->server_setup_gallery_window = main->get_gallery_mode();
+    const std::string account_id(main->get_server_setup_account());
+    const std::string worker_url(main->get_server_setup_host());
+    ui_->server_setup_future = std::async(std::launch::async,
+        [submitted, account_id, worker_url] {
+      auto discovery = cloudflare::CloudflareProvisioningService{}.DiscoverBackend(
+          submitted, account_id, worker_url);
+      SlintUi::ServerSetupResult result;
+      result.ok = discovery.review_ready;
+      result.discovery_attempt = true;
+      result.requested_token = submitted;
+      result.review_ready = discovery.review_ready;
+      result.needs_account_id = discovery.needs_account_id;
+      result.needs_worker_url = discovery.needs_worker_url;
+      result.discovered_account_id = std::move(discovery.account_id);
+      result.suggested_worker_url = std::move(discovery.suggested_worker_url);
+      result.message = std::move(discovery.message);
+      result.review = std::move(discovery.review);
+      return result;
+    });
+  });
+  main->on_server_setup_submit([this, main](
+      int32_t provider, int32_t method, slint::SharedString host,
+      slint::SharedString port, slint::SharedString token,
+      slint::SharedString account) {
+    main->set_server_setup_error("");
+    if (HasActiveSession()) {
+      main->set_server_setup_error("Disconnect active sessions before changing the signaling server.");
+      return;
+    }
+    if (provider == 1) {
+      if (method == 1) {
+        if (ui_->server_setup_future.valid()) {
+          main->set_server_setup_error("Another Cloudflare operation is still running.");
+          return;
+        }
+        const std::string api_token(token);
+        const std::string submitted_account(account);
+        const std::string provided_worker_url(host);
+        if (api_token.empty()) {
+          main->set_server_setup_error("Enter a Cloudflare API Token.");
+          return;
+        }
+        // Keep the input intact during asynchronous preflight. It is needed
+        // for retry after a scope error, network issue or invalid Account ID.
+        ui_->server_setup_pending_token = api_token;
+        ui_->server_setup_review = {};
+        main->set_server_setup_review_open(false);
+        main->set_server_setup_busy(true);
+        main->set_server_setup_status("Inspecting Cloudflare account, Worker and TURN (read only)...");
+        ui_->server_setup_gallery_window = main->get_gallery_mode();
+        ui_->server_setup_future = std::async(std::launch::async,
+            [api_token, submitted_account, provided_worker_url] {
+          cloudflare::CloudflareProvisioningService service;
+          std::string account_id = submitted_account;
+          if (account_id.empty()) {
+            std::string error;
+            const auto accounts = service.ListAccounts(api_token, &error);
+            if (accounts.size() != 1) {
+              return SlintUi::ServerSetupResult{
+                  false, false, {},
+                  accounts.empty()
+                      ? "Cannot discover account; enter your Account ID. " + error
+                      : "More than one Cloudflare account found. Enter the desired Account ID."};
+            }
+            account_id = accounts.front().id;
+          }
+          auto review =
+              service.ReviewAccount(api_token, account_id, provided_worker_url);
+          SlintUi::ServerSetupResult result;
+          result.ok = review.ok;
+          result.review_ready = review.ok;
+          result.message = review.explanation;
+          result.review = std::move(review);
+          return result;
+        });
+        return;
+      }
+      if (ui_->server_setup_future.valid()) {
+        main->set_server_setup_error("A Cloudflare check is still running.");
+        return;
+      }
+      main->set_server_setup_busy(true);
+      main->set_server_setup_status("Verifying existing ReDesk Worker...");
+      const std::string url(host);
+      ui_->server_setup_gallery_window = main->get_gallery_mode();
+      ui_->server_setup_future = std::async(std::launch::async, [url] {
+        std::string endpoint;
+        auto result = cloudflare::CloudflareProvisioningService{}.ConfigureExisting(
+            cloudflare::SetupOptions{.worker_url = url}, &endpoint);
+        SlintUi::ServerSetupResult response;
+        response.ok = result.ok;
+        response.endpoint = std::move(endpoint);
+        response.message = result.error;
+        // Existing Worker verification is a completed selection, not an
+        // install/update. Without a completion kind the generic success path
+        // leaves Finish on the previous page and repeats verification.
+        response.setup_completion_kind = result.ok ? 4 : 0;
+        return response;
+      });
+      return;
+    }
+    if (provider != 0 && provider != 2) {
+      main->set_server_setup_error("Unknown server provider");
+      return;
+    }
+    const auto parsed_port = ParsePort(port);
+    if (provider == 2 && !parsed_port) {
+      main->set_server_setup_error("Enter a valid signal port (1-65535).");
+      return;
+    }
+    const auto choice = provider == 0
+        ? ConfigCenter::SERVER_PROVIDER::PUBLIC
+        : ConfigCenter::SERVER_PROVIDER::CUSTOM;
+    if (config_center_->SelectServer(choice, std::string(host),
+                                    provider == 0 ? 0 : *parsed_port) != 0) {
+      main->set_server_setup_error("Server address is invalid or could not be saved.");
+      return;
+    }
+    main->set_server_setup_token("");
+    main->set_server_setup_cloudflare_configured(
+        config_center_->GetServerProvider() ==
+            ConfigCenter::SERVER_PROVIDER::CLOUDFLARE);
+    main->set_server_setup_open(false);
+    main->set_server_setup_status("");
+    ApplySettingsFromConfig(true);
+  });
   main->on_save_self_hosted_settings([this, main] {
     // Stage the endpoint until the surrounding settings dialog is confirmed.
     return ValidateSelfHostedSettingsFromUi(main->get_gallery_mode());
@@ -2584,6 +3172,187 @@ void GuiApplication::BindServerCallbacks() {
 }
 
 void GuiApplication::Tick() {
+  if (ui_ && ui_->server_setup_future.valid() &&
+      ui_->server_setup_future.wait_for(std::chrono::milliseconds(0)) ==
+          std::future_status::ready) {
+    auto result = ui_->server_setup_future.get();
+    auto& window = ui_->Window(ui_->server_setup_gallery_window);
+    // A cancelled wizard may still have a read-only network request in
+    // flight. Discard its completion rather than reopening the review.
+    if (!window->get_server_setup_open()) {
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
+      window->set_server_setup_busy(false);
+      window->set_server_setup_token("");
+    } else {
+    window->set_server_setup_busy(false);
+    window->set_server_setup_status("");
+    // A post-connection version probe needs no API token. It only calls
+    // the public Worker /health endpoint and never updates the Worker.
+    if (result.worker_version_probe) {
+      window->set_server_setup_deployed_version(
+          result.review.worker_version.empty()
+              ? (result.ok ? "Unknown (legacy)" : "Unavailable")
+              : result.review.worker_version.c_str());
+      window->set_server_setup_status(result.ok
+          ? "Enter a Cloudflare API Token and Fetch to review available updates."
+          : "Worker health unavailable. You can still Fetch with your token.");
+    } else if (result.health_retry) {
+      if (window->get_server_setup_review_open()) {
+        ui_->server_setup_review = result.review;
+        window->set_server_setup_deployed_version(
+            result.review.worker_version.empty()
+                ? "Unknown (legacy)" : result.review.worker_version.c_str());
+        window->set_server_setup_review_description(result.message.c_str());
+        window->set_server_setup_review_existing(result.review.worker_exists);
+        window->set_server_setup_review_do_binding(result.review.durable_object_binding);
+        window->set_server_setup_review_turn_configured(result.review.turn_configured);
+        window->set_server_setup_review_can_use(result.review.redesk_health);
+        window->set_server_setup_review_can_update(result.review.update_safe);
+        window->set_server_setup_review_can_install(
+            !result.review.worker_exists &&
+            result.review.turn_keys_checked && !result.review.existing_turn_key);
+        window->set_server_setup_review_can_resume(result.review.pending_turn_recovery);
+        window->set_server_setup_confirm_update(false);
+        window->set_server_setup_error("");
+        window->set_server_setup_status(result.review.redesk_health
+            ? "ReDesk /health verified successfully."
+            : "Health check failed. Retry or go back to change the Worker URL.");
+      }
+    } else if (result.discovery_attempt &&
+               result.requested_token !=
+                   std::string(window->get_server_setup_token())) {
+      // Ignore a fetch started for a previous token. Edits invalidate all
+      // suggested account and Worker fields without erasing the new token.
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
+      window->set_server_setup_need_account(false);
+      window->set_server_setup_need_worker_url(false);
+      window->set_server_setup_token_verified(false);
+      window->set_server_setup_error("");
+      window->set_server_setup_status("");
+    } else if (result.discovery_attempt) {
+      window->set_server_setup_need_account(result.needs_account_id);
+      window->set_server_setup_need_worker_url(result.needs_worker_url);
+      window->set_server_setup_token_verified(result.review_ready ||
+                                               !result.discovered_account_id.empty());
+      if (!result.discovered_account_id.empty())
+        window->set_server_setup_account(result.discovered_account_id.c_str());
+      // Never replace a URL the user has already entered while Fetch ran.
+      if (!result.suggested_worker_url.empty() &&
+          std::string(window->get_server_setup_host()).empty())
+        window->set_server_setup_host(result.suggested_worker_url.c_str());
+      if (result.review_ready) {
+        window->set_server_setup_retry_available(false);
+        ui_->server_setup_pending_token =
+            std::string(window->get_server_setup_token());
+        ui_->server_setup_review = result.review;
+        window->set_server_setup_deployed_version(
+            result.review.worker_version.empty()
+                ? "Unknown (legacy)" : result.review.worker_version.c_str());
+        window->set_server_setup_review_open(true);
+        window->set_server_setup_review_description(result.message.c_str());
+        window->set_server_setup_review_url(result.review.worker_url.c_str());
+        window->set_server_setup_review_existing(result.review.worker_exists);
+        window->set_server_setup_review_do_binding(result.review.durable_object_binding);
+        window->set_server_setup_review_turn_configured(result.review.turn_configured);
+        window->set_server_setup_review_can_use(
+            result.review.worker_exists && result.review.redesk_health);
+        window->set_server_setup_review_can_update(result.review.update_safe);
+        window->set_server_setup_review_turn_key(result.review.existing_turn_key);
+        window->set_server_setup_review_turn_checked(result.review.turn_keys_checked);
+        window->set_server_setup_review_can_install(
+            !result.review.worker_exists &&
+            result.review.turn_keys_checked && !result.review.existing_turn_key);
+        window->set_server_setup_review_can_resume(result.review.pending_turn_recovery);
+        window->set_server_setup_confirm_update(false);
+        window->set_server_setup_error("");
+      } else {
+        ui_->server_setup_pending_token.clear();
+        ui_->server_setup_review = {};
+        if (!result.suggested_worker_url.empty()) {
+          // First-time setup is expected, not an error.
+          window->set_server_setup_error("");
+          window->set_server_setup_status(result.message.c_str());
+        } else {
+          window->set_server_setup_error(result.message.c_str());
+        }
+      }
+    } else if (result.token_validation) {
+      window->set_server_setup_error(result.ok ? "" : result.message.c_str());
+      window->set_server_setup_status(result.ok ? "Cloudflare API token is active." : "");
+    } else if (result.review_ready) {
+      window->set_server_setup_retry_available(false);
+      ui_->server_setup_review = result.review;
+      window->set_server_setup_deployed_version(
+          result.review.worker_version.empty()
+              ? "Unknown (legacy)" : result.review.worker_version.c_str());
+      window->set_server_setup_review_open(true);
+      window->set_server_setup_review_description(result.message.c_str());
+      window->set_server_setup_review_url(result.review.worker_url.c_str());
+      window->set_server_setup_review_existing(result.review.worker_exists);
+        window->set_server_setup_review_do_binding(result.review.durable_object_binding);
+        window->set_server_setup_review_turn_configured(result.review.turn_configured);
+      window->set_server_setup_review_can_use(
+          result.review.worker_exists && result.review.redesk_health);
+      window->set_server_setup_review_can_update(result.review.update_safe);
+      window->set_server_setup_review_turn_key(result.review.existing_turn_key);
+      window->set_server_setup_review_turn_checked(result.review.turn_keys_checked);
+      window->set_server_setup_review_can_install(
+          !result.review.worker_exists &&
+          result.review.turn_keys_checked && !result.review.existing_turn_key);
+      window->set_server_setup_review_can_resume(result.review.pending_turn_recovery);
+      window->set_server_setup_confirm_update(false);
+      window->set_server_setup_error("");
+    } else if (!result.ok) {
+      if (result.reconcile_kind != 0) {
+        // This is an actionable confirmation, not the preceding install
+        // error. The confirmation view explains the proposed changes.
+        window->set_server_setup_error("");
+        window->set_server_setup_status("");
+        window->set_server_setup_reconcile_kind(result.reconcile_kind);
+      } else {
+        window->set_server_setup_reconcile_kind(0);
+      }
+      // Retain the verified in-memory token, account and review so Retry Setup
+      // can safely re-inspect Cloudflare without requiring the user to start over.
+      window->set_server_setup_retry_available(
+          (result.setup_completion_kind != 0 || result.setup_retry_attempt) &&
+          !ui_->server_setup_pending_token.empty() &&
+          ui_->server_setup_review.ok);
+      if (result.reconcile_kind == 0)
+        window->set_server_setup_error(result.message.c_str());
+    } else if (config_center_->SelectServer(
+            ConfigCenter::SERVER_PROVIDER::CLOUDFLARE,
+            result.endpoint, 443) != 0) {
+      window->set_server_setup_retry_available(
+          !ui_->server_setup_pending_token.empty() && ui_->server_setup_review.ok);
+      window->set_server_setup_error("Cloudflare setup succeeded but saving the server configuration failed. Retry Setup will recheck the backend.");
+    } else {
+      window->set_server_setup_retry_available(false);
+      window->set_server_setup_reconcile_kind(0);
+      const std::string completed_worker_url = ui_->server_setup_review.worker_url;
+      ui_->server_setup_pending_token.clear();
+      ui_->server_setup_review = {};
+      window->set_server_setup_token("");
+      window->set_server_setup_review_open(false);
+      window->set_server_setup_cloudflare_configured(true);
+      window->set_server_setup_deployed_version(cloudflare::kReDeskWorkerVersion);
+      window->set_server_setup_page(1);
+      window->set_server_setup_error("");
+      window->set_server_setup_status("");
+      // Keep the setup window visible until the user explicitly selects Finish.
+      // Do not confuse successful API deployment with post-update health:
+      // those have distinct completion text in the UI.
+      const std::string success_url = completed_worker_url.empty()
+          ? std::string(window->get_server_setup_host())
+          : completed_worker_url;
+      window->set_server_setup_success_url(success_url.c_str());
+      window->set_server_setup_success_kind(result.setup_completion_kind);
+      ApplySettingsFromConfig(true);
+    }
+    }
+  }
 #if _WIN32
   if (ui_) {
     ui_->session_end.Start();  // Retry a transient native-window creation failure.
@@ -2835,16 +3604,6 @@ void GuiApplication::Tick() {
   SyncGallery();
   SyncConnectionDialog();
   SyncPlatformDialogs();
-  // Wait for startup notices and user interactions to finish. Once shown,
-  // never reopen it during this run, even if saving the dismissal fails.
-  if (ui_->sponsorship_prompt_pending &&
-      ui_->main->window().is_visible() &&
-      !ui_->main->window().is_minimized() &&
-      ui_->main->get_can_show_sponsorship() &&
-      !ui_->file_dialog_open && !HasActiveSession()) {
-    ui_->sponsorship_prompt_pending = false;
-    ui_->main->set_sponsorship_open(true);
-  }
   SyncStreamWindow();
   SyncServerWindow();
   SyncTrustedDevices();
@@ -3718,7 +4477,8 @@ void GuiApplication::SyncConnectionDialog() {
   } else {
     text = props->lan_session_ && !props->lan_session_->error.empty()
                ? props->lan_session_->error
-               : ConnectionStatusText(status, localization_language_index_);
+               : ConnectionStatusText(status, localization_language_index_,
+                                      props->traversal_mode_.load(), props->params_.turn_mode);
   }
   if (auth.retry_after > 0) {
     char retry_text[256];
@@ -4125,19 +4885,40 @@ void GuiApplication::SyncStreamWindow() {
   const bool waiting_for_frame =
       status == MiniRtcConnectionStatus::MiniRtcConnectionConnected &&
       !(*ui_->stream)->get_has_frame();
-  // Once the peer is connected, the frame-waiting hint replaces the
-  // connection status. Keeping these states mutually exclusive also avoids a
-  // transient overlap when both properties are synchronized in one tick.
-  (*ui_->stream)
-      ->set_status_text(UiText(
-          status == MiniRtcConnectionStatus::MiniRtcConnectionConnected
-              ? std::string{}
-              : ConnectionStatusText(status, localization_language_index_)));
-  (*ui_->stream)
-      ->set_receiving_text(UiText(
-          waiting_for_frame
-              ? localization::receiving_screen[localization_language_index_]
-              : std::string{}));
+  const auto route = props->traversal_mode_.load();
+  const std::string connected_path =
+      ConnectedPathText(route, props->params_.turn_mode,
+                        localization_language_index_);
+  // ICE connected and first remote video frame received are separate states.
+  // Label the actual route while waiting, and report a stalled media path
+  // after 12 s instead of showing "Receiving screen..." indefinitely.
+  std::string receiving_text;
+  if (waiting_for_frame) {
+    receiving_text = localization::receiving_screen[localization_language_index_];
+    const int64_t started_ms = props->connected_since_ms_.load();
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (started_ms > 0 && now_ms - started_ms >= 12000) {
+      const auto video = props->received_video_stats_.Get();
+      const bool decoded = video.width > 0 && video.height > 0;
+      receiving_text = localization::Literal(
+          decoded ? "已收到画面，但尚未显示。请检查渲染器。"
+                  : "尚未收到画面。请检查主机捕获与媒体传输。",
+          localization_language_index_);
+      if (!props->first_video_wait_reported_.exchange(true)) {
+        const auto net = props->net_traffic_stats_.Load();
+        LOG_WARN("No remote screen after 12s: selected_route={} configured_turn={} "
+                 "decoded_video={} video_rtp_packets={} video_bitrate={} srtp_active={}",
+                 static_cast<int>(route), static_cast<int>(props->params_.turn_mode),
+                 decoded, net.video_inbound_stats.rtp_packet_count,
+                 net.video_inbound_stats.bitrate, net.srtp_active);
+      }
+    }
+    receiving_text += "\n" + connected_path;
+  }
+  (*ui_->stream)->set_status_text(UiText(ConnectionStatusText(
+      status, localization_language_index_, route, props->params_.turn_mode)));
+  (*ui_->stream)->set_receiving_text(UiText(receiving_text));
   (*ui_->stream)->set_mouse_control_enabled(props->control_mouse_);
   {
     std::lock_guard lock(props->privacy_status_mutex_);
@@ -4293,13 +5074,9 @@ void GuiApplication::SyncStreamWindow() {
   (*ui_->stream)
       ->set_stats_resolution(UiText(FormatResolution(props->video_width_,
                                                      props->video_height_)));
-  (*ui_->stream)
-      ->set_stats_connection_mode(
-          UiText(props->traversal_mode_ == MiniRtcTraversalMode::MiniRtcTraversalP2P
-                     ? localization::connection_mode_direct
-                           [localization_language_index_]
-                     : localization::connection_mode_relay
-                           [localization_language_index_]));
+  (*ui_->stream)->set_stats_connection_mode(UiText(
+      ConnectedPathText(props->traversal_mode_.load(), props->params_.turn_mode,
+                        localization_language_index_)));
 
   const auto fps_now = std::chrono::steady_clock::now();
   bool refresh_stats = false;
@@ -5045,14 +5822,9 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
         "无法读取设备身份或可信列表，请修复后再启用。", localization_language_index_)));
     return false;
   }
-  const bool has_endpoint = main->get_self_hosted_enabled() ||
-      !std::string(main->get_server_host()).empty() ||
-      !std::string(main->get_server_port()).empty();
-  if (has_endpoint && !ValidateSelfHostedSettingsFromUi(gallery_window)) {
-    main->set_settings_tab(0);
-    main->set_self_host_settings_open(true);
-    return false;
-  }
+  // The standalone Change Server flow exclusively owns signaling endpoints.
+  // Never validate or rewrite a stale legacy self-hosted draft when saving
+  // unrelated settings (privacy, language, LAN, etc.).
   const auto wall_settings = gallery::StreamSettings::FromIndices(
       main->get_gallery_resolution_draft(), main->get_gallery_frame_rate_draft(),
       main->get_gallery_bandwidth_draft());
@@ -5068,17 +5840,6 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
     main->set_gallery_settings_error(UiText(
         localization::Literal("保存失败，请重试", localization_language_index_)));
     main->set_settings_tab(1);
-    return false;
-  }
-  if ((has_endpoint && config_center_->SetServerEndpoint(
-          std::string(main->get_server_host()), *ParsePort(main->get_server_port())) != 0) ||
-      config_center_->SetSelfHosted(main->get_self_hosted_enabled()) != 0) {
-    if (wall_changed && !ui_->gallery.Save(ui_->gallery_path))
-      LOG_ERROR("Failed to restore DeskHub settings after common save failure");
-    main->set_self_host_settings_error(UiText(
-        localization::self_hosted_save_failed[localization_language_index_]));
-    main->set_settings_tab(0);
-    main->set_self_host_settings_open(true);
     return false;
   }
   if (config_center_->SetIpDirectEnabled(main->get_ip_direct_enabled_draft()) != 0) {
@@ -5139,7 +5900,7 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
   language_button_value_ =
       std::clamp(main->get_language_index(), 0, localization::kSystemLanguage);
   video_encode_format_button_value_ = std::clamp(main->get_codec_index(), 0, 1);
-  enable_self_hosted_ = main->get_self_hosted_enabled();
+  enable_self_hosted_ = config_center_->IsSelfHosted();
 #if !defined(__OHOS__)
   enable_autostart_ = main->get_autostart_enabled();
 #endif
@@ -5156,8 +5917,19 @@ bool GuiApplication::SaveSettingsFromUi(bool gallery_window) {
   config_center_->SetVideoEncodeFormat(
       static_cast<ConfigCenter::VIDEO_ENCODE_FORMAT>(
           video_encode_format_button_value_));
-  config_center_->SetForceRelay(main->get_force_relay_enabled());
-  main->set_force_relay_enabled(config_center_->IsForceRelay());
+  const int selected_turn = std::clamp(main->get_turn_mode_index(), 0, 2);
+  const auto requested_turn = selected_turn == 2
+      ? ConfigCenter::TURN_MODE::FORCE_TCP
+      : selected_turn == 1 ? ConfigCenter::TURN_MODE::FORCE_UDP
+                           : ConfigCenter::TURN_MODE::AUTO_UDP_TCP;
+  if (config_center_->SetTurnMode(requested_turn) != 0) {
+    main->set_turn_mode_index(
+        config_center_->GetTurnMode() == ConfigCenter::TURN_MODE::FORCE_TCP ? 2 :
+        config_center_->GetTurnMode() == ConfigCenter::TURN_MODE::FORCE_UDP ? 1 : 0);
+    main->set_settings_save_error(UiText(
+        localization::Literal("保存失败，请重试", localization_language_index_)));
+    return false;
+  }
 #if !defined(__OHOS__)
   bool identity_ready = true;
 #ifdef _WIN32
@@ -5931,6 +6703,12 @@ void GuiApplication::SaveGalleryWindowState() {
     if (ui_->gallery_window.wall_size) {
       state["width"] = int(std::lround(ui_->gallery_window.wall_size->width));
       state["height"] = int(std::lround(ui_->gallery_window.wall_size->height));
+    }
+    if (ui_->connection_window.connection_size) {
+      state["connection_width"] =
+          int(std::lround(ui_->connection_window.connection_size->width));
+      state["connection_height"] =
+          int(std::lround(ui_->connection_window.connection_size->height));
     }
     if (ui_->gallery_window.wall_position) {
       state["wall_x"] = ui_->gallery_window.wall_position->x / scale;
@@ -6929,9 +7707,10 @@ void GuiApplication::SyncGallery() {
     const auto online = device_presence_cache_.GetOnline(id);
     tile.online = tile.connected || online.value_or(false);
     tile.presence_known = tile.connected || online.has_value();
-    tile.status = UiText(
-        tile.connected ? tr("等待画面")
-                       : tr("未连接"));
+    tile.status = UiText(tile.connected && props
+        ? ConnectedPathText(props->traversal_mode_.load(),
+                            props->params_.turn_mode, localization_language_index_)
+        : tr("未连接"));
     const bool queued = !tile.connected && std::any_of(
         ui_->batch_operations.begin(), ui_->batch_operations.end(),
         [&](const auto& operation) {

@@ -1,15 +1,25 @@
 ; Set search path
 !addincludedir "${__FILEDIR__}"
+;
+; nsProcess.dll is bundled with this repository, not with standard NSIS.
+; Register the local x86 Unicode plugin directory so _FindProcess and
+; _KillProcess work with a stock NSIS 3 installation (no global plugin copy).
+!addplugindir /x86-unicode "${__FILEDIR__}"
 
 ; Installer initial constants
-!define PRODUCT_NAME "CrossDesk"
+!define PRODUCT_NAME "ReDesk"
 !define PRODUCT_VERSION "${VERSION}"
 !define PRODUCT_VERSION_NUMERIC "${VERSION_NUMERIC}"
-!define PRODUCT_PUBLISHER "CrossDesk"
-!define PRODUCT_WEB_SITE "https://www.crossdesk.cn/"
-!define APP_NAME "CrossDesk"
-!define UNINSTALL_REG_KEY "CrossDesk"
-!define PRODUCT_SERVICE_NAME "CrossDeskService"
+!define PRODUCT_PUBLISHER "ReDesk"
+!define PRODUCT_WEB_SITE "https://github.com/sbolhasani/ReDesk"
+!define APP_NAME "ReDesk"
+!define UNINSTALL_REG_KEY "ReDesk"
+!define PRODUCT_SERVICE_NAME "ReDeskService"
+
+; Can be overridden by pkg_x64.ps1 for an independent Non-Portable output.
+!ifndef REDESK_RELEASE_DIR
+  !define REDESK_RELEASE_DIR "..\..\..\..\build\windows\x64\release"
+!endif
 
 ; Installer icon path
 !define MUI_ICON "${__FILEDIR__}\..\..\resources\windows\crossdesk.ico"
@@ -45,7 +55,7 @@ Var UpdateMode
 Function .onInit
     ${GetParameters} $0
     ClearErrors
-    ${GetOptions} $0 "/CROSSDESK_UPDATE" $1
+    ${GetOptions} $0 "/REDESK_UPDATE" $1
     StrCpy $UpdateMode 0
     ${IfNot} ${Errors}
         StrCpy $UpdateMode 1
@@ -53,32 +63,41 @@ Function .onInit
 FunctionEnd
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "crossdesk-win-x64-${PRODUCT_VERSION}.exe"
+OutFile "redesk-win-x64-${PRODUCT_VERSION}.exe"
 VIProductVersion "${PRODUCT_VERSION_NUMERIC}"
-VIAddVersionKey /LANG=2052 "CompanyName" "CrossDesk"
-VIAddVersionKey /LANG=2052 "FileDescription" "CrossDesk Installer"
+VIAddVersionKey /LANG=2052 "CompanyName" "ReDesk"
+VIAddVersionKey /LANG=2052 "FileDescription" "ReDesk Installer"
 VIAddVersionKey /LANG=2052 "FileVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey /LANG=2052 "LegalCopyright" "Copyright (C) CrossDesk contributors"
-VIAddVersionKey /LANG=2052 "OriginalFilename" "crossdesk-win-x64-${PRODUCT_VERSION}.exe"
+VIAddVersionKey /LANG=2052 "OriginalFilename" "redesk-win-x64-${PRODUCT_VERSION}.exe"
 VIAddVersionKey /LANG=2052 "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey /LANG=2052 "ProductVersion" "${PRODUCT_VERSION}"
-InstallDir "$PROGRAMFILES\CrossDesk"
+InstallDir "$PROGRAMFILES\ReDesk"
 InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallDir"
 ShowInstDetails show
 
 Section "MainSection"
+    ; Never install ReDesk into a folder containing a CrossDesk installation.
+    ; This also protects its binaries from a later recursive ReDesk uninstall.
+    IfFileExists "$INSTDIR\CrossDesk.exe" unsafeCrossDeskInstall 0
+    IfFileExists "$INSTDIR\crossdesk_service.exe" unsafeCrossDeskInstall 0
+    Goto safeInstallDirectory
+unsafeCrossDeskInstall:
+    MessageBox MB_ICONSTOP|MB_OK "This directory contains CrossDesk. Select a separate folder for ReDesk to avoid damaging CrossDesk during installation or removal."
+    Abort
+safeInstallDirectory:
     ; The updater has already coordinated shutdown. Never kill unrelated
     ; instances by name during an unattended upgrade.
     ${If} $UpdateMode = 1
         Goto installApp
     ${EndIf}
-    ; Check if CrossDesk is running
-    StrCpy $1 "CrossDesk.exe"
+    ; Check if ReDesk is running
+    StrCpy $1 "ReDesk.exe"
     
     nsProcess::_FindProcess "$1"
     Pop $R0
     ${If} $R0 = 0  ;
-        MessageBox MB_ICONQUESTION|MB_YESNO "CrossDesk is running. Do you want to close it and continue the installation?" IDYES closeApp IDNO cancelInstall
+        MessageBox MB_ICONQUESTION|MB_YESNO "ReDesk is running. Do you want to close it and continue the installation?" IDYES closeApp IDNO cancelInstall
     ${Else}
         Goto installApp
     ${EndIf}
@@ -102,31 +121,31 @@ installApp:
     SetOverwrite on
 
     ; Main application executable path
-    File /oname=CrossDesk.exe "..\..\..\..\build\windows\x64\release\crossdesk.exe"
-    File "..\..\..\..\build\windows\x64\release\crossdesk_updater.exe"
+    File /oname=ReDesk.exe "${REDESK_RELEASE_DIR}\ReDesk.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_updater.exe"
     ; Bundle service-side binaries required by the Windows service flow
-    File "..\..\..\..\build\windows\x64\release\crossdesk_service.exe"
-    File "..\..\..\..\build\windows\x64\release\crossdesk_session_helper.exe"
-    File "..\..\..\..\build\windows\x64\release\crossdesk_privacy_cursor_helper.exe"
-    File "..\..\..\..\build\windows\x64\release\crossdesk_privacy_window.dll"
+    File "${REDESK_RELEASE_DIR}\redesk_service.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_session_helper.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_privacy_cursor_helper.exe"
+    File "${REDESK_RELEASE_DIR}\redesk_privacy_window.dll"
     ; Require the Slint runtime so an incomplete build cannot be packaged.
-    File "..\..\..\..\build\windows\x64\release\slint_cpp.dll"
+    File "${REDESK_RELEASE_DIR}\slint_cpp.dll"
     ; Bundle the remaining runtime DLLs from the release output directory
-    File /x crossdesk_privacy_window.dll /x slint_cpp.dll "..\..\..\..\build\windows\x64\release\*.dll"
+    File /x redesk_privacy_window.dll /x slint_cpp.dll "${REDESK_RELEASE_DIR}\*.dll"
     ; Amyuni usbmmidd_v2 virtual display driver for headless hosts. xmake
     ; copies apps\desktop\resources\windows\usbmmidd_v2 into the release
-    ; output directory after building crossdesk; its License.txt ships with it.
-    File /r "..\..\..\..\build\windows\x64\release\usbmmidd_v2"
+    ; output directory after building redesk; its License.txt ships with it.
+    File /r "${REDESK_RELEASE_DIR}\usbmmidd_v2"
 
     Call RegisterInstalledService
 
     ; Replace an existing per-user Run entry only after the new binary is in
     ; place. A fresh installation must not opt the user into auto-start.
     ClearErrors
-    ExecWait '"$INSTDIR\CrossDesk.exe" --autostart-migrate' $0
+    ExecWait '"$INSTDIR\ReDesk.exe" --autostart-migrate' $0
     ${If} ${Errors}
     ${OrIf} $0 != 0
-        MessageBox MB_ICONEXCLAMATION|MB_OK "Could not migrate CrossDesk auto-start. Open CrossDesk and enable Auto Start again."
+        MessageBox MB_ICONEXCLAMATION|MB_OK "Could not migrate ReDesk auto-start. Open ReDesk and enable Auto Start again."
     ${EndIf}
 
     ; Write uninstall information
@@ -138,7 +157,7 @@ installApp:
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_REG_KEY}" "InstallLocation" "$INSTDIR"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_REG_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_REG_KEY}" "URLInfoAbout" "${PRODUCT_WEB_SITE}"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_REG_KEY}" "DisplayIcon" "$INSTDIR\CrossDesk.exe"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_REG_KEY}" "DisplayIcon" "$INSTDIR\ReDesk.exe"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_REG_KEY}" "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_REG_KEY}" "NoRepair" 1
     WriteRegStr HKCU "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
@@ -146,20 +165,28 @@ SectionEnd
 
 Section -AdditionalIcons
     ; Desktop shortcut
-    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\CrossDesk.exe" "" "$INSTDIR\CrossDesk.exe"
+    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\ReDesk.exe" "" "$INSTDIR\ReDesk.exe"
 
     ; Start menu shortcut
-    CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\CrossDesk.exe" "" "$INSTDIR\CrossDesk.exe"
+    CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\ReDesk.exe" "" "$INSTDIR\ReDesk.exe"
 SectionEnd
 
 Section "Uninstall"
-    ; Check if CrossDesk is running
-    StrCpy $1 "CrossDesk.exe"
+    ; Abort instead of recursively deleting a shared CrossDesk folder.
+    IfFileExists "$INSTDIR\CrossDesk.exe" unsafeCrossDeskUninstall 0
+    IfFileExists "$INSTDIR\crossdesk_service.exe" unsafeCrossDeskUninstall 0
+    Goto safeUninstallDirectory
+unsafeCrossDeskUninstall:
+    MessageBox MB_ICONSTOP|MB_OK "CrossDesk files were found in this folder. ReDesk uninstall is blocked to protect them. Separate the installations before uninstalling."
+    Abort
+safeUninstallDirectory:
+    ; Check if ReDesk is running
+    StrCpy $1 "ReDesk.exe"
     
     nsProcess::_FindProcess "$1"
     Pop $R0
     ${If} $R0 = 0
-        MessageBox MB_ICONQUESTION|MB_YESNO "CrossDesk is running. Do you want to close it and uninstall?" IDYES closeApp IDNO cancelUninstall
+        MessageBox MB_ICONQUESTION|MB_YESNO "ReDesk is running. Do you want to close it and uninstall?" IDYES closeApp IDNO cancelUninstall
     ${Else}
         Goto uninstallApp
     ${EndIf}
@@ -177,21 +204,22 @@ cancelUninstall:
 
 uninstallApp:
     ClearErrors
-    ExecWait '"$INSTDIR\CrossDesk.exe" --autostart-uninstall' $0
+    ExecWait '"$INSTDIR\ReDesk.exe" --autostart-uninstall' $0
     ${If} ${Errors}
     ${OrIf} $0 != 0
-        MessageBox MB_ICONEXCLAMATION|MB_OK "Could not remove CrossDesk auto-start. Remove any remaining CrossDesk Autostart tasks in Task Scheduler."
+        MessageBox MB_ICONEXCLAMATION|MB_OK "Could not remove ReDesk auto-start. Remove any remaining ReDesk Autostart tasks in Task Scheduler."
     ${EndIf}
     Call un.UnregisterInstalledService
-    Call un.RemoveUsbmmiddDriver
+    ; usbmmidd is shared with CrossDesk: never uninstall it on ReDesk removal.
+    ; Call un.RemoveUsbmmiddDriver
 
     ; Delete main executable and uninstaller
-    Delete "$INSTDIR\CrossDesk.exe"
-    Delete "$INSTDIR\crossdesk_updater.exe"
-    Delete "$INSTDIR\crossdesk_service.exe"
-    Delete "$INSTDIR\crossdesk_session_helper.exe"
-    Delete "$INSTDIR\crossdesk_privacy_cursor_helper.exe"
-    Delete "$INSTDIR\crossdesk_privacy_window.dll"
+    Delete "$INSTDIR\ReDesk.exe"
+    Delete "$INSTDIR\redesk_updater.exe"
+    Delete "$INSTDIR\redesk_service.exe"
+    Delete "$INSTDIR\redesk_session_helper.exe"
+    Delete "$INSTDIR\redesk_privacy_cursor_helper.exe"
+    Delete "$INSTDIR\redesk_privacy_window.dll"
     Delete "$INSTDIR\uninstall.exe"
 
     ; Leave the install directory before removing it
@@ -210,9 +238,9 @@ uninstallApp:
     ; Delete remembered install dir
     DeleteRegKey HKCU "Software\${PRODUCT_NAME}"
 
-    ; Recursively delete CrossDesk folder in user AppData
-    RMDir /r "$APPDATA\CrossDesk"
-    RMDir /r "$LOCALAPPDATA\CrossDesk"
+    ; Recursively delete ReDesk folder in user AppData
+    RMDir /r "$APPDATA\ReDesk"
+    RMDir /r "$LOCALAPPDATA\ReDesk"
 SectionEnd
 
 ; ------ Functions ------
@@ -220,7 +248,7 @@ Function LaunchApp
     ${If} $UpdateMode = 1
         Return
     ${EndIf}
-    Exec "$INSTDIR\CrossDesk.exe"
+    Exec "$INSTDIR\ReDesk.exe"
 FunctionEnd
 
 Function .onInstFailed
@@ -228,83 +256,83 @@ Function .onInstFailed
 FunctionEnd
 
 Function StopInstalledService
-    IfFileExists "$INSTDIR\CrossDesk.exe" 0 stop_with_sc
-    IfFileExists "$INSTDIR\crossdesk_service.exe" 0 stop_with_sc
+    IfFileExists "$INSTDIR\ReDesk.exe" 0 stop_with_sc
+    IfFileExists "$INSTDIR\redesk_service.exe" 0 stop_with_sc
 
-    DetailPrint "Stopping existing CrossDesk service"
-    ExecWait '"$INSTDIR\CrossDesk.exe" --service-stop' $0
+    DetailPrint "Stopping existing ReDesk service"
+    ExecWait '"$INSTDIR\ReDesk.exe" --service-stop' $0
     ${If} $0 = 0
         Return
     ${EndIf}
 
 stop_with_sc:
-    DetailPrint "Stopping existing CrossDesk service via Service Control Manager"
+    DetailPrint "Stopping existing ReDesk service via Service Control Manager"
     ExecWait '"$SYSDIR\sc.exe" stop ${PRODUCT_SERVICE_NAME}' $0
     ${If} $0 != 0
     ${AndIf} $0 != 1060
     ${AndIf} $0 != 1062
-        MessageBox MB_ICONSTOP|MB_OK "Failed to stop the existing CrossDesk service. The installation will be aborted."
+        MessageBox MB_ICONSTOP|MB_OK "Failed to stop the existing ReDesk service. The installation will be aborted."
         Abort
     ${EndIf}
     Sleep 1500
 FunctionEnd
 
 Function RegisterInstalledService
-    IfFileExists "$INSTDIR\CrossDesk.exe" 0 missing_service_binary
-    IfFileExists "$INSTDIR\crossdesk_service.exe" 0 missing_service_binary
-    IfFileExists "$INSTDIR\crossdesk_session_helper.exe" 0 missing_service_binary
+    IfFileExists "$INSTDIR\ReDesk.exe" 0 missing_service_binary
+    IfFileExists "$INSTDIR\redesk_service.exe" 0 missing_service_binary
+    IfFileExists "$INSTDIR\redesk_session_helper.exe" 0 missing_service_binary
 
-    DetailPrint "Registering CrossDesk service"
-    ExecWait '"$INSTDIR\CrossDesk.exe" --service-install' $0
+    DetailPrint "Registering ReDesk service"
+    ExecWait '"$INSTDIR\ReDesk.exe" --service-install' $0
     ${If} $0 != 0
-        MessageBox MB_ICONSTOP|MB_OK "Failed to register the CrossDesk service. The installation will be aborted."
+        MessageBox MB_ICONSTOP|MB_OK "Failed to register the ReDesk service. The installation will be aborted."
         Abort
     ${EndIf}
 
     ; Preserve an existing unattended opt-in and resume it after upgrades.
     ; A fresh install still registers the ordinary on-demand lock-screen service.
     SetRegView 64
-    ReadRegDWORD $1 HKLM "Software\CrossDesk\Unattended" "Enabled"
+    ReadRegDWORD $1 HKLM "Software\ReDesk\Unattended" "Enabled"
     SetRegView 32
     ${If} $1 = 1
-        ExecWait '"$INSTDIR\CrossDesk.exe" --service-start' $0
+        ExecWait '"$INSTDIR\ReDesk.exe" --service-start' $0
         ${If} $0 != 0
-            MessageBox MB_ICONEXCLAMATION|MB_OK "Could not restart the unattended host. Run CrossDesk.exe --service-start from an administrator terminal."
+            MessageBox MB_ICONEXCLAMATION|MB_OK "Could not restart the unattended host. Run ReDesk.exe --service-start from an administrator terminal."
         ${EndIf}
     ${EndIf}
-    DetailPrint "CrossDesk service registered"
+    DetailPrint "ReDesk service registered"
 
     Return
 
 missing_service_binary:
-    MessageBox MB_ICONSTOP|MB_OK "CrossDesk service files are missing from the installer package. The installation will be aborted."
+    MessageBox MB_ICONSTOP|MB_OK "ReDesk service files are missing from the installer package. The installation will be aborted."
     Abort
 FunctionEnd
 
 Function un.UnregisterInstalledService
     ; Also disarm unattended startup when removal must fall back to sc.exe.
     SetRegView 64
-    DeleteRegKey HKLM "Software\CrossDesk\Unattended"
+    DeleteRegKey HKLM "Software\ReDesk\Unattended"
     SetRegView 32
-    IfFileExists "$INSTDIR\CrossDesk.exe" 0 unregister_with_sc
+    IfFileExists "$INSTDIR\ReDesk.exe" 0 unregister_with_sc
 
-    DetailPrint "Stopping CrossDesk service"
-    ExecWait '"$INSTDIR\CrossDesk.exe" --service-stop' $0
+    DetailPrint "Stopping ReDesk service"
+    ExecWait '"$INSTDIR\ReDesk.exe" --service-stop' $0
     ${If} $0 = 0
-        DetailPrint "Removing CrossDesk service"
-        ExecWait '"$INSTDIR\CrossDesk.exe" --service-uninstall' $0
+        DetailPrint "Removing ReDesk service"
+        ExecWait '"$INSTDIR\ReDesk.exe" --service-uninstall' $0
         ${If} $0 = 0
             Return
         ${EndIf}
     ${EndIf}
 
 unregister_with_sc:
-    DetailPrint "Removing CrossDesk service via Service Control Manager"
+    DetailPrint "Removing ReDesk service via Service Control Manager"
     ExecWait '"$SYSDIR\sc.exe" stop ${PRODUCT_SERVICE_NAME}' $0
     ${If} $0 != 0
     ${AndIf} $0 != 1060
     ${AndIf} $0 != 1062
-        MessageBox MB_ICONSTOP|MB_OK "Failed to stop the CrossDesk service. Uninstall will be aborted."
+        MessageBox MB_ICONSTOP|MB_OK "Failed to stop the ReDesk service. Uninstall will be aborted."
         Abort
     ${EndIf}
     Sleep 1500
@@ -312,19 +340,21 @@ unregister_with_sc:
     ExecWait '"$SYSDIR\sc.exe" delete ${PRODUCT_SERVICE_NAME}' $0
     ${If} $0 != 0
     ${AndIf} $0 != 1060
-        MessageBox MB_ICONSTOP|MB_OK "Failed to remove the CrossDesk service. Uninstall will be aborted."
+        MessageBox MB_ICONSTOP|MB_OK "Failed to remove the ReDesk service. Uninstall will be aborted."
         Abort
     ${EndIf}
 FunctionEnd
 
-; The session helper (or an elevated CrossDesk) installs the bundled usbmmidd
-; driver on first headless use and records HKLM\SOFTWARE\CrossDesk\
-; UsbmmiddDriverInstalled in the 64-bit registry view. Only a driver CrossDesk
+; The session helper (or an elevated ReDesk) installs the bundled usbmmidd
+; driver on first headless use and records HKLM\SOFTWARE\ReDesk\
+; UsbmmiddDriverInstalled in the 64-bit registry view. Only a driver ReDesk
 ; installed is removed here; one set up by the user for other software stays.
 ; deviceinstaller64.exe resolves usbmmIdd.dll relative to the working
 ; directory, so run it from the driver folder. Failures are logged, not fatal:
 ; the driver can still be removed from Device Manager.
 Function un.RemoveUsbmmiddDriver
+    ; A shared system driver must never be removed while another client uses it.
+    Return
     IfFileExists "$INSTDIR\usbmmidd_v2\deviceinstaller64.exe" 0 done
 
     SetRegView 64
@@ -336,7 +366,7 @@ Function un.RemoveUsbmmiddDriver
         Return
     ${EndIf}
 
-    DetailPrint "Removing the usbmmidd virtual display driver installed by CrossDesk"
+    DetailPrint "Removing the usbmmidd virtual display driver installed by ReDesk"
     SetOutPath "$INSTDIR\usbmmidd_v2"
     ; Unplug every virtual monitor first (the driver allows up to four).
     StrCpy $1 0

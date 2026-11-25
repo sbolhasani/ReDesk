@@ -2,9 +2,17 @@ name: MCP package
 
 on:
   push:
-    branches: ["**"]
-    tags-ignore: ["mcp-v*", "cli-v*"]
+    branches: ["main"]
+    paths:
+      - "apps/mcp/**"
+      - "scripts/version.py"
+      - ".github/workflows/build-mcp.yml"
   pull_request:
+    branches: ["main"]
+    paths:
+      - "apps/mcp/**"
+      - "scripts/version.py"
+      - ".github/workflows/build-mcp.yml"
   workflow_dispatch:
   workflow_call:
 

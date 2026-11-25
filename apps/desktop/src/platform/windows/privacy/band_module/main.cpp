@@ -20,7 +20,7 @@
 
 namespace {
 using namespace crossdesk;
-constexpr wchar_t kWindowClass[] = L"CrossDesk.HighBandPrivacy";
+constexpr wchar_t kWindowClass[] = L"ReDesk.HighBandPrivacy";
 constexpr DWORD kCoverStyles = WS_EX_TOPMOST | WS_EX_NOACTIVATE |
                                WS_EX_TOOLWINDOW | WS_EX_LAYERED |
                                WS_EX_TRANSPARENT;
@@ -97,7 +97,7 @@ class Windows {
           return Fail(L"Reposition high-band cover");
         continue;
       }
-      HWND hwnd = create_(kCoverStyles, atom_, L"CrossDesk Privacy", WS_POPUP,
+      HWND hwnd = create_(kCoverStyles, atom_, L"ReDesk Privacy", WS_POPUP,
                           rect.left, rect.top, rect.right - rect.left,
                           rect.bottom - rect.top, nullptr, nullptr, module,
                           this, kPrivacyWindowBand);

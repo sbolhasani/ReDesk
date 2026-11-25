@@ -20,7 +20,7 @@ int GuiApplication::RunUnattended(void* stop_event) {
   if (!ProcessIdToSessionId(GetCurrentProcessId(), &session) || session == 0)
     return 1;
 
-  path_manager_ = std::make_unique<PathManager>("CrossDesk");
+  path_manager_ = std::make_unique<PathManager>("ReDesk");
   const auto root = UnattendedDataPath();
   std::string identity_error;
   shared_identity_ = SharedHostIdentity::AcquireHost(identity_error);

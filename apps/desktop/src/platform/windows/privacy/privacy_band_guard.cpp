@@ -88,7 +88,7 @@ bool PrivacyBandGuard::Available(std::string& error) {
     return Failed("Resolve privacy module directory", error);
   const auto dll = directory / kPrivacyBandDll;
   if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
-    return Failed("Missing crossdesk_privacy_window.dll", error);
+    return Failed("Missing redesk_privacy_window.dll", error);
   return true;
 #endif
 }
@@ -109,10 +109,10 @@ bool PrivacyBandGuard::Start(const PrivacyScreenText& text,
       !StringFromGUID2(guid, guid_text, 40))
     return Failed("Resolve high-band broker paths", error);
   broker_directory_ = std::filesystem::path(temporary) /
-                      (std::wstring(L"CrossDesk-privacy-") + guid_text);
+                      (std::wstring(L"ReDesk-privacy-") + guid_text);
   if (!CreateDirectoryW(broker_directory_.c_str(), nullptr))
     return Failed("Create private broker directory", error);
-  broker_path_ = broker_directory_ / L"RuntimeBroker_crossdesk.exe";
+  broker_path_ = broker_directory_ / L"RuntimeBroker_redesk.exe";
   if (!CopyFileW((std::filesystem::path(system) / L"RuntimeBroker.exe").c_str(),
                  broker_path_.c_str(), TRUE))
     return Failed("Copy system RuntimeBroker for this session", error);

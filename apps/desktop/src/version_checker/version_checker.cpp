@@ -107,6 +107,11 @@ void ConfigureLinuxCaCerts(httplib::Client* cli) {
 }  // namespace
 
 std::optional<VersionInfo> CheckUpdate() {
+#if defined(_WIN32)
+  // ReDesk must never consume CrossDesk's upstream update feed or install its binaries.
+  // Enable only after an independent, signed ReDesk feed is configured.
+  return std::nullopt;
+#else
   httplib::Client cli("https://version.crossdesk.cn");
 
   cli.set_connection_timeout(5);
@@ -177,6 +182,7 @@ std::optional<VersionInfo> CheckUpdate() {
     LogHttpError(res);
     return std::nullopt;
   }
+#endif
 }
 
 }  // namespace crossdesk

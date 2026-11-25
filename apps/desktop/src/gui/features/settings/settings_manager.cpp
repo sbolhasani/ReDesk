@@ -369,6 +369,12 @@ std::string SettingsManager::ActiveIdentity() const {
 }
 
 int SettingsManager::Load() {
+  // UI localization comes from config.ini, not from the encrypted identity
+  // cache. The first launch has no identity cache and returns early below;
+  // initialize language before any of those paths can exit.
+  owner_.language_button_value_ =
+      static_cast<int>(owner_.config_center_->GetLanguage());
+  owner_.language_button_value_last_ = owner_.language_button_value_;
   std::unique_lock<std::mutex> lock(cache_mutex_);
 
 #if defined(__linux__) && !defined(__OHOS__)
@@ -455,7 +461,6 @@ int SettingsManager::Load() {
       std::make_shared<Thumbnail>(owner_.cache_path_ + "/thumbnails/",
                                   owner_.aes128_key_, owner_.aes128_iv_);
 
-  owner_.language_button_value_ = static_cast<int>(owner_.config_center_->GetLanguage());
   owner_.video_encode_format_button_value_ =
       static_cast<int>(owner_.config_center_->GetVideoEncodeFormat());
   owner_.enable_self_hosted_ = owner_.config_center_->IsSelfHosted();
@@ -473,7 +478,6 @@ int SettingsManager::Load() {
   CopyString(owner_.file_transfer_save_path_buf_, saved_path.c_str());
   owner_.file_transfer_save_path_last_ = saved_path;
 
-  owner_.language_button_value_last_ = owner_.language_button_value_;
   owner_.video_encode_format_button_value_last_ =
       owner_.video_encode_format_button_value_;
   owner_.enable_self_hosted_last_ = owner_.enable_self_hosted_;

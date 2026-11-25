@@ -78,6 +78,10 @@ export global UiStrings {
     in-out property <string> pause-video-when-minimized: "Pause video when minimized";
     in-out property <string> pause-video-when-minimized-hint: "Pause video reception when the control window is minimized to reduce local decoding resource usage.";
     in-out property <string> force-relay: "Force relay";
+    in-out property <string> turn-mode: "TURN connection mode";
+    in-out property <string> turn-auto: "Auto (P2P / Relay)";
+    in-out property <string> turn-force-udp: "Force Relay (UDP)";
+    in-out property <string> turn-force-tcp: "Force Relay (TCP)";
     in-out property <string> self-hosted: "Self-hosted server";
     in-out property <string> autostart: "Start with system";
     in-out property <string> daemon: "Run in background";
@@ -367,9 +371,9 @@ export component MainWindow inherits Window {
     preferred-width: root.minimum-window-width;
     preferred-height: root.minimum-window-height;
     min-width: root.minimum-window-width;
-    max-width: root.gallery-mode ? 16384px : root.minimum-window-width;
+    max-width: 16384px;
     min-height: root.minimum-window-height;
-    max-height: root.gallery-mode ? 16384px : root.minimum-window-height;
+    max-height: 16384px;
     no-frame: root.custom-titlebar;
     background: root.wayland-titlebar ? transparent : white;
     default-font-size: ImGuiFontStyle.base;
@@ -741,6 +745,8 @@ export component MainWindow inherits Window {
     in-out property <bool> lan-listen-all-draft: true;
     in property <string> settings-save-error;
     in-out property <bool> force-relay-enabled: false;
+    // 0 Auto, 1 Force UDP, 2 Force TCP; disabled mode is intentionally not exposed.
+    in-out property <int> turn-mode-index: 0;
     in-out property <bool> self-hosted-enabled: false;
     in-out property <bool> autostart-enabled: false;
     in property <bool> autostart-available: true;
@@ -761,10 +767,10 @@ export component MainWindow inherits Window {
     in-out property <bool> pause-video-when-minimized: true;
     // Show the preference on every platform; only adapted hosts can change it.
     in property <bool> privacy-setting-available: false;
-    in-out property <bool> privacy-on-connect-enabled: true;
+    in-out property <bool> privacy-on-connect-enabled: false;
     in-out property <bool> privacy-local-unlock-allowed: true;
     in property <bool> lock-on-disconnect-available: false;
-    in-out property <bool> lock-on-disconnect-enabled: true;
+    in-out property <bool> lock-on-disconnect-enabled: false;
     in-out property <bool> trusted-devices-only: false;
     in-out property <bool> trusted-devices-open: false;
     in property <[TrustedDeviceEntry]> trusted-devices;
@@ -779,6 +785,58 @@ export component MainWindow inherits Window {
     in-out property <string> file-save-path: "";
     in-out property <string> server-host: "";
     in-out property <string> server-port: "";
+    // First-run and Settings share the same server selector.
+    in-out property <bool> server-setup-open: false;
+    in-out property <int> server-setup-page: 0;
+    in-out property <int> server-setup-provider: 0;
+    in-out property <int> server-setup-cloudflare-method: 0;
+    in-out property <string> server-setup-host: "";
+    in-out property <string> server-setup-port: "9099";
+    in-out property <string> server-setup-token: "";
+    in-out property <string> server-setup-account: "";
+    in-out property <string> server-setup-error: "";
+    in-out property <string> server-setup-status: "";
+    in-out property <bool> server-setup-busy: false;
+    in-out property <bool> server-setup-reveal-token: false;
+    in-out property <bool> server-setup-need-account: false;
+    in-out property <bool> server-setup-need-worker-url: false;
+    in-out property <bool> server-setup-token-verified: false;
+    in-out property <bool> server-setup-cloudflare-configured: false;
+    in-out property <int> configured-server-provider: 0;
+    in-out property <string> configured-server-host: "";
+    in-out property <string> configured-server-display: "";
+    in-out property <bool> configured-server-copied: false;
+    callback copy-configured-server-address() -> bool;
+    in-out property <bool> server-setup-switch-confirm: false;
+    in-out property <bool> server-setup-postconnect: false;
+    in-out property <string> server-setup-deployed-version: "Unknown";
+    in-out property <string> server-setup-bundled-version: "1.0.0";
+    callback server-setup-manage-worker();
+    in-out property <bool> server-setup-review-open: false;
+    in-out property <bool> server-setup-retry-available: false;
+    // Explicit approval for repairing abandoned TURN state.
+    in-out property <int> server-setup-reconcile-kind: 0;
+    // 0 = normal, 1 = installed, 2 = resumed TURN, 3 = updated, 4 = existing.
+    in-out property <int> server-setup-success-kind: 0;
+    in-out property <string> server-setup-success-url: "";
+    in property <string> server-setup-review-description: "";
+    in property <string> server-setup-review-url: "";
+    in property <bool> server-setup-review-existing: false;
+    in property <bool> server-setup-review-do-binding: false;
+    in property <bool> server-setup-review-turn-configured: false;
+    in property <bool> server-setup-review-can-use: false;
+    in property <bool> server-setup-review-can-update: false;
+    in property <bool> server-setup-review-turn-key: false;
+    in-out property <bool> server-setup-review-turn-checked: false;
+    in-out property <bool> server-setup-review-can-install: false;
+    in-out property <bool> server-setup-review-can-resume: false;
+    in-out property <bool> server-setup-confirm-update: false;
+    callback server-setup-decision(int);
+    callback server-setup-retry-health();
+    callback server-setup-close();
+    callback server-setup-submit(int, int, string, string, string, string);
+    callback server-setup-validate-token(string);
+    callback server-setup-create-token;
     in-out property <string> self-host-settings-error: "";
     in property <bool> settings-session-active: false;
 
@@ -826,6 +884,9 @@ export component MainWindow inherits Window {
     callback main-title-drag(int, length, length);
     callback minimize-main-window;
     callback close-main-window;
+    callback request-application-exit;
+    callback confirm-application-exit;
+    in-out property <bool> exit-confirm-open: false;
 
     private property <bool> menu-open: false;
     in-out property <bool> settings-open: false;
@@ -2216,7 +2277,8 @@ export component MainWindow inherits Window {
         y: menu-button.y + menu-button.height + 6px;
         width: max(128px, max(menu-feedback-label.preferred-width, max(menu-settings-label.preferred-width,
                    max(menu-messages-label.preferred-width + (root.announcement-unread > 0 ? menu-message-badge.width + 8px : 0px),
-                       menu-about-label.preferred-width + (root.update-available ? menu-update-badge.width + 8px : 0px)))) + 28px);
+                       max(menu-about-label.preferred-width + (root.update-available ? menu-update-badge.width + 8px : 0px),
+                           menu-exit-label.preferred-width)))) + 28px);
         height: application-menu-content.preferred-height;
         background: WorkbenchStyle.surface;
         outline-color: UiSurface.edge;
@@ -2372,6 +2434,77 @@ export component MainWindow inherits Window {
                 feedback-touch := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.menu-open = false; root.feedback-open = true; }
+                }
+            }
+            Rectangle {
+                height: 7px;
+                SurfaceSeparator {
+                    x: 8px; y: 3px; width: parent.width - 16px; height: 1px;
+                    outline-color: UiSurface.separator;
+                }
+            }
+            menu-exit := Rectangle {
+                height: 30px;
+                background: exit-touch.pressed ? WorkbenchStyle.pressed-surface
+                          : exit-touch.has-hover ? WorkbenchStyle.hover-surface : transparent;
+                border-radius: UiRadius.control;
+                animate background { duration: 120ms; }
+                accessible-role: button;
+                accessible-label: "Exit";
+                accessible-action-default => { exit-touch.clicked(); }
+                menu-exit-label := Text {
+                    x: 8px; height: parent.height; text: "Exit";
+                    color: WorkbenchStyle.text; font-size: 12px;
+                    vertical-alignment: center; accessible-role: none;
+                }
+                exit-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.menu-open = false;
+                        root.request-application-exit();
+                    }
+                }
+            }
+        }
+    }
+
+    // Explicit Exit is distinct from closing/minimizing to the system tray.
+    // Keep the confirmation visible until the user chooses an action.
+    if root.exit-confirm-open: Rectangle {
+        width: parent.width; height: parent.height;
+        background: #14233b88; z: 400;
+        TouchArea { scroll-event(event) => { accept } }
+        DialogSurface {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(420px, parent.width - 40px);
+            height: 180px;
+            outline-color: UiSurface.edge;
+            Text {
+                x: 20px; y: 18px; width: parent.width - 40px; height: 28px;
+                text: "Exit ReDesk?";
+                color: WorkbenchStyle.text; font-size: 18px; font-weight: 600;
+            }
+            Text {
+                x: 20px; y: 54px; width: parent.width - 40px; height: 67px;
+                text: "One or more incoming or outgoing remote connections are active. Exiting will disconnect these sessions and close ReDesk completely.";
+                color: WorkbenchStyle.text; font-size: 12px; wrap: word-wrap;
+            }
+            HorizontalLayout {
+                x: 20px; y: parent.height - 52px;
+                width: parent.width - 40px; height: 34px; spacing: 10px;
+                Rectangle { horizontal-stretch: 1; }
+                SettingsButton {
+                    width: 90px; height: 34px; text: "Cancel";
+                    clicked => { root.exit-confirm-open = false; }
+                }
+                SettingsButton {
+                    width: 130px; height: 34px; primary: true;
+                    text: "Exit ReDesk";
+                    clicked => {
+                        root.exit-confirm-open = false;
+                        root.confirm-application-exit();
+                    }
                 }
             }
         }
@@ -2964,7 +3097,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         SettingsGroup {
-                            title: GalleryStrings.texts[116]; rows: 4;
+                            title: GalleryStrings.texts[116]; rows: 7;
                             SettingsToggleRow {
                                 label: GalleryStrings.texts[117];
                                 checked <=> root.ip-direct-enabled-draft;
@@ -2974,21 +3107,83 @@ export component MainWindow inherits Window {
                                 checked <=> root.lan-listen-all-draft;
                                 enabled: root.ip-direct-enabled-draft;
                             }
-                            SettingsToggleRow { label: UiStrings.force-relay; checked <=> root.force-relay-enabled; enabled: !root.settings-session-active; }
-                            SettingsToggleRow {
-                                label: UiStrings.self-hosted;
-                                label-reserve: self-host-edit.width + 84px;
-                                checked <=> root.self-hosted-enabled; enabled: !root.settings-session-active; divider: false;
-                                self-host-edit := SettingsButton {
-                                    x: parent.width - self.width - 60px; y: 4px;
-                                    width: self-host-edit-metrics.preferred-width + 24px; height: 28px;
-                                    text: GalleryStrings.texts[118];
+                            // Controls sit below their titles, not on top of text.
+                            // Both sections occupy two 36px settings rows.
+                            Rectangle {
+                                width: parent.width; height: 72px;
+                                Text {
+                                    x: 12px; y: 3px; width: parent.width - 24px; height: 25px;
+                                    text: UiStrings.turn-mode; font-size: 12px;
+                                    color: root.settings-session-active ? #9ba5b3 : #34445a;
+                                    vertical-alignment: center; overflow: elide;
+                                }
+                                SettingsSelect {
+                                    x: 12px; y: 35px; width: parent.width - 24px; height: 28px;
                                     enabled: !root.settings-session-active;
-                                    clicked => { root.self-host-settings-open = true; }
-                                    self-host-edit-metrics := Text {
-                                        visible: false; accessible-role: none;
-                                        text: parent.text; font-size: 12px;
+                                    model: [UiStrings.turn-auto, UiStrings.turn-force-udp, UiStrings.turn-force-tcp];
+                                    current-index <=> root.turn-mode-index;
+                                }
+                                SurfaceSeparator {
+                                    x: 12px; y: parent.height - 1px;
+                                    width: parent.width - 24px;
+                                    outline-color: UiSurface.separator;
+                                }
+                            }
+                            // The unified server picker replaces the legacy self-hosted
+                            // toggle/editor and is the only entry point from Settings.
+                            Rectangle {
+                                width: parent.width; height: 108px;
+                                Text {
+                                    x: 12px; y: 3px; width: parent.width - 24px; height: 22px;
+                                    text: "Signaling Server"; font-size: 12px;
+                                    color: WorkbenchStyle.text; vertical-alignment: center;
+                                }
+                                Text {
+                                    x: 12px; y: 25px; width: parent.width - 24px; height: 20px;
+                                    text: root.configured-server-provider == 1 ? "Cloudflare"
+                                        : root.configured-server-provider == 2 ? "Custom Server"
+                                        : "CrossDesk Public Server";
+                                    color: WorkbenchStyle.text; font-size: 12px;
+                                    font-weight: 600; vertical-alignment: center;
+                                }
+                                Text {
+                                    x: 12px; y: 44px;
+                                    width: root.configured-server-provider == 0
+                                        ? parent.width - 24px : parent.width - 100px;
+                                    height: 18px;
+                                    text: root.configured-server-display;
+                                    color: WorkbenchStyle.muted; font-size: 11px;
+                                    overflow: elide; vertical-alignment: center;
+                                }
+                                if root.configured-server-provider != 0 && root.configured-server-display != "": SettingsButton {
+                                    x: parent.width - 82px; y: 40px;
+                                    width: 70px; height: 26px;
+                                    text: root.configured-server-copied ? "Copied" : "Copy";
+                                    clicked => {
+                                        root.configured-server-copied = root.copy-configured-server-address();
                                     }
+                                }
+                                SettingsButton {
+                                    x: 12px; y: 66px;
+                                    width: parent.width - 24px; height: 28px;
+                                    text: "Change Server";
+                                    enabled: !root.settings-session-active;
+                                    clicked => {
+                                        root.settings-open = false;
+                                        root.server-setup-postconnect = false;
+                                        root.server-setup-switch-confirm = false;
+                                        root.server-setup-success-kind = 0;
+                                        root.server-setup-success-url = "";
+                                        root.server-setup-retry-available = false;
+                                        root.server-setup-reconcile-kind = 0;
+                                        root.server-setup-open = true;
+                                        root.server-setup-page = 0;
+                                    }
+                                }
+                                SurfaceSeparator {
+                                    x: 12px; y: parent.height - 1px;
+                                    width: parent.width - 24px;
+                                    outline-color: UiSurface.separator;
                                 }
                             }
                         }
@@ -3212,54 +3407,6 @@ export component MainWindow inherits Window {
             SurfaceSeparator { x: 18px; y: parent.height - 66px; width: parent.width - 36px; height: 1px; outline-color: UiSurface.separator; }
             SettingsButton { x: parent.width - 114px; y: parent.height - 50px; width: 92px; primary: true; text: UiStrings.ok; clicked => { if root.save-self-hosted-settings() { root.self-host-settings-open = false; } } }
             SettingsButton { x: parent.width - 124px - self.width; y: parent.height - 50px; width: max(80px, self.label-width); text: UiStrings.cancel; clicked => { root.cancel-self-hosted-settings(); root.self-host-settings-open = false; } }
-        }
-    }
-
-    if root.sponsorship-open && root.sponsorship-unobstructed: Rectangle {
-        background: #15223850;
-        z: 38;
-        TouchArea { clicked => { focus-sink.focus(); } }
-        SettingsDialog {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: min(480px, parent.width - 40px);
-            height: self.content-top + sponsorship-content.preferred-height + 24px;
-            title: UiStrings.sponsorship-title;
-            show-close-button: false;
-            sponsorship-content := VerticalLayout {
-                x: 24px; y: parent.content-top;
-                width: parent.width - 48px; height: self.preferred-height;
-                padding: 0px; spacing: 20px;
-                Text {
-                    text: UiStrings.sponsorship-message;
-                    color: WorkbenchStyle.text; font-size: 14px; wrap: word-wrap;
-                    // Match message bodies' 1.5em line height for wrapped text.
-                    font-family: "CrossDesk Message Spacing";
-                }
-                SponsorshipSection {
-                    show-title: false;
-                    open-afdian => { root.open-afdian-sponsor(); }
-                    open-kofi => { root.open-kofi-sponsor(); }
-                    open-github => { root.open-github-sponsor(); }
-                }
-                Text {
-                    text: UiStrings.sponsorship-dismiss-hint;
-                    color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;
-                    font-family: "CrossDesk Message Spacing";
-                }
-                SurfaceSeparator { height: 1px; outline-color: UiSurface.separator; }
-                HorizontalLayout {
-                    alignment: end;
-                    SettingsButton {
-                        width: max(80px, sponsorship-close-metrics.preferred-width + 24px);
-                        primary: true; text: MessageStrings.close;
-                        clicked => { root.dismiss-sponsorship(); }
-                        sponsorship-close-metrics := Text {
-                            visible: false; text: MessageStrings.close; font-size: 12px;
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -3917,6 +4064,707 @@ export component MainWindow inherits Window {
                             accessible-label: UiStrings.ok;
                             accessible-action-default => { root.dismiss-lan-access-warning(); }
                             clicked => { root.dismiss-lan-access-warning(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    // Modal server selection. No existing settings or device identity are
+    // changed until the native callback successfully commits a selection.
+    if root.server-setup-open: Rectangle {
+        width: parent.width; height: parent.height;
+        background: #15223888; z: 350;
+        TouchArea { scroll-event(event) => { accept } }
+        DialogSurface {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(600px, parent.width - 24px);
+            height: min(790px, parent.height - 24px);
+            background: #f8fafc;
+            outline-color: UiSurface.edge;
+            TouchArea { scroll-event(event) => { accept } }
+            Text {
+                x: 22px; y: 20px; width: parent.width - 44px; height: 30px;
+                text: root.server-setup-success-kind != 0 ? "Cloudflare Backend Ready"
+                    : root.server-setup-review-open ? "Review Cloudflare Backend"
+                    : root.server-setup-page == 0 ? "1. Choose a server"
+                    : root.server-setup-provider == 1 ? "2. Connect Cloudflare"
+                    : "2. Configure server";
+                font-size: 21px; font-weight: 600; color: WorkbenchStyle.text;
+            }
+            Text {
+                x: 22px; y: 56px; width: parent.width - 44px; height: 42px;
+                text: root.server-setup-success-kind != 0
+                    ? "The operation succeeded. Review the result and select Finish."
+                    : root.server-setup-review-open
+                    ? "3. Review backend components and confirm the requested operation."
+                    : root.server-setup-page == 0
+                    ? "Select a signaling provider. Your device identity is preserved."
+                    : root.server-setup-provider == 1
+                    ? "Enter your API token and account ID. ReDesk checks the backend before making changes."
+                    : "Your previous server remains configured until the new selection succeeds.";
+                font-size: 12px; wrap: word-wrap; color: WorkbenchStyle.muted;
+            }
+            if root.server-setup-postconnect && !root.server-setup-review-open: Text {
+                x: 22px; y: 98px; width: parent.width - 44px; height: 22px;
+                text: "Installed Worker: " + root.server-setup-deployed-version
+                    + "    Bundled: " + root.server-setup-bundled-version;
+                color: WorkbenchStyle.muted; font-size: 11px;
+            }
+            // Reconciliation is a separate step. Only its body scrolls;
+            // footer actions stay visible at the bottom of the dialog.
+            if root.server-setup-reconcile-kind != 0: ScrollView {
+                x: 22px; y: 110px; width: parent.width - 44px;
+                height: max(90px, parent.height - 190px);
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                viewport-height: reconcile-content.preferred-height;
+                reconcile-content := VerticalLayout {
+                    width: parent.width - 16px;
+                    height: self.preferred-height;
+                    padding: 0px; spacing: 14px;
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: "Confirm TURN setup recovery";
+                        color: #9c4720; font-size: 17px; font-weight: 600;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: root.server-setup-reconcile-kind == 1
+                            ? "Cloudflare no longer has the TURN key, but this PC still has its encrypted recovery file."
+                            : "Cloudflare still has a ReDesk TURN key whose secret is unavailable. Replacing it may interrupt other clients using that key.";
+                        font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
+                    }
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: root.server-setup-reconcile-kind == 1
+                            ? "After confirmation: delete only this account's obsolete local encrypted TURN recovery file, then create a new ReDesk backend."
+                            : "After confirmation: delete the single verified orphaned ReDesk TURN key in this account, then generate a new key and continue setup.";
+                        font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
+                    }
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: "Cloudflare Worker, Durable Object and unrelated TURN keys will NOT be deleted. The account and key identities will be checked again before cleanup.";
+                        font-size: 12px; color: WorkbenchStyle.muted; wrap: word-wrap;
+                    }
+                    if root.server-setup-busy: Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: "Rechecking Cloudflare state and continuing setup...";
+                        font-size: 12px; color: WorkbenchStyle.muted; wrap: word-wrap;
+                    }
+                }
+            }
+            if root.server-setup-success-kind != 0: VerticalLayout {
+                x: 22px; y: 112px; width: parent.width - 44px;
+                spacing: 15px;
+                Text {
+                    text: root.server-setup-success-kind == 1
+                        ? "Cloudflare backend installed successfully"
+                        : root.server-setup-success-kind == 2
+                        ? "Pending TURN setup recovered successfully"
+                        : root.server-setup-success-kind == 3
+                        ? "Worker updated successfully"
+                        : "Existing Cloudflare backend selected";
+                    color: #18703b; font-size: 17px; font-weight: 600;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.server-setup-success-kind == 1
+                        ? "Worker, Durable Object and TURN are configured. The Worker health check passed."
+                        : root.server-setup-success-kind == 2
+                        ? "Existing TURN credentials were restored without rotation. Worker health and TURN configuration passed verification."
+                        : root.server-setup-success-kind == 3
+                        ? "Cloudflare accepted the Worker update without a Durable Object reset. Post-update health has not yet been checked."
+                        : "This Worker passed the health check and is now the signaling server.";
+                    color: WorkbenchStyle.text; font-size: 13px; wrap: word-wrap;
+                }
+                Text {
+                    text: "Worker: redesk-signal";
+                    color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-success-url;
+                    color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;
+                }
+                Text {
+                    text: root.server-setup-success-kind == 1 || root.server-setup-success-kind == 2
+                        ? "Worker Health: Verified    TURN: Configured"
+                        : root.server-setup-success-kind == 3
+                        ? "Worker: Updated    Post-update health: Not verified"
+                        : "Worker Health: Verified";
+                    color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;
+                }
+            }
+            if root.server-setup-review-open && root.server-setup-success-kind == 0
+                    && root.server-setup-reconcile-kind == 0: ScrollView {
+                x: 22px; y: 107px; width: parent.width - 44px;
+                height: max(90px, parent.height -
+                    (root.server-setup-error != "" || root.server-setup-status != "" ? 266px : 183px));
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                viewport-height: server-review-content.preferred-height;
+                server-review-content := VerticalLayout {
+                    width: parent.width - 16px; padding: 0px; spacing: 12px;
+                Text {
+                    text: "Worker: redesk-signal";
+                    color: WorkbenchStyle.text; font-weight: 600; font-size: 13px;
+                }
+                Text {
+                    text: root.server-setup-review-existing ? "Worker: Existing" : "Worker: Not installed";
+                    color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-review-existing
+                        ? (root.server-setup-review-do-binding ? "Durable Object: Verified" : "Durable Object: Not verified")
+                        : "Durable Object: Will be created during installation";
+                    color: WorkbenchStyle.text; font-size: 12px; wrap: word-wrap;
+                }
+                Text {
+                    text: root.server-setup-review-turn-configured ? "TURN: Configured and healthy"
+                        : root.server-setup-review-turn-key ? "TURN: Existing key found (not yet verified)"
+                        : root.server-setup-review-turn-checked ? "TURN: Not configured"
+                        : "TURN: Verification unavailable";
+                    color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-review-url;
+                    wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 12px;
+                }
+                Text {
+                    text: "Deployed Worker: " + root.server-setup-deployed-version
+                        + "    Bundled: " + root.server-setup-bundled-version;
+                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-review-description;
+                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 12px;
+                }
+                Text {
+                    text: root.server-setup-review-turn-key
+                        ? "Existing TURN key detected. No rotation or deletion will occur."
+                        : "No existing ReDesk TURN key was found.";
+                    color: WorkbenchStyle.muted; font-size: 11px; wrap: word-wrap;
+                }
+                if !root.server-setup-review-can-use && root.server-setup-review-existing: SettingsButton {
+                    width: parent.width; height: 34px;
+                    primary: true;
+                    text: root.server-setup-busy ? "Checking /health..." : "Retry Health Check";
+                    enabled: !root.server-setup-busy;
+                    clicked => { root.server-setup-retry-health(); }
+                }
+                if root.server-setup-review-existing: SettingsButton {
+                    width: parent.width; height: 34px; text: "Use Existing Backend";
+                    enabled: root.server-setup-review-can-use && !root.server-setup-busy;
+                    clicked => { root.server-setup-decision(0); }
+                }
+                if root.server-setup-review-existing: SettingsButton {
+                    width: parent.width; height: 34px; text: "Update Worker (keep Durable Object data)";
+                    enabled: root.server-setup-review-can-update && !root.server-setup-busy;
+                    clicked => { root.server-setup-confirm-update = true; }
+                }
+                if root.server-setup-retry-available: SettingsButton {
+                    width: parent.width; height: 34px;
+                    primary: true;
+                    text: root.server-setup-busy ? "Retrying setup..." : "Retry Setup";
+                    enabled: !root.server-setup-busy;
+                    clicked => { root.server-setup-decision(3); }
+                }
+                if !root.server-setup-retry-available &&
+                        (root.server-setup-review-can-install || root.server-setup-review-can-resume): SettingsButton {
+                    width: parent.width; height: 34px;
+                    primary: true;
+                    text: root.server-setup-review-can-resume
+                        ? "Resume Pending TURN Setup" : "Install New Backend";
+                    enabled: !root.server-setup-busy;
+                    clicked => { root.server-setup-decision(1); }
+                }
+                if !root.server-setup-retry-available && !root.server-setup-review-existing
+                        && !root.server-setup-review-can-install
+                        && !root.server-setup-review-can-resume: Text {
+                    text: root.server-setup-review-turn-checked
+                        ? "Installation unavailable: inspect the status above."
+                        : "Installation unavailable until TURN key access can be verified.";
+                    color: WorkbenchStyle.muted; font-size: 11px; wrap: word-wrap;
+                }
+                if root.server-setup-confirm-update: VerticalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: "Confirm deploying new Worker code to this Account. The existing Durable Object and registered devices must remain intact. No data reset is requested.";
+                        color: #a43c27; font-size: 12px; wrap: word-wrap;
+                    }
+                    SettingsButton {
+                        width: parent.width; height: 34px; destructive: true;
+                        text: "Confirm Update Worker";
+                        enabled: !root.server-setup-busy;
+                        clicked => { root.server-setup-confirm-update = false; root.server-setup-decision(2); }
+                    }
+                }
+                Text {
+                    text: "Overwrite / Reset Durable Object data is unavailable until a verified, backup-capable procedure is implemented.";
+                    color: WorkbenchStyle.muted; wrap: word-wrap; font-size: 11px;
+                }
+                }
+            }
+            // Single-choice server picker. The three options are selectable
+            // rows, not action buttons; Continue opens the selected provider.
+            if root.server-setup-page == 0 && !root.server-setup-review-open
+                    && root.server-setup-success-kind == 0
+                    && root.server-setup-reconcile-kind == 0: VerticalLayout {
+                x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
+                Rectangle {
+                    width: parent.width; height: 72px; border-radius: UiRadius.control;
+                    background: root.server-setup-provider == 1 ? #eaf2ff : white;
+                    border-width: root.server-setup-provider == 1 ? 2px : 1px;
+                    border-color: root.server-setup-provider == 1 ? #3275dc : UiSurface.edge;
+                    Text {
+                        x: 18px; y: 12px; width: 32px; height: 48px;
+                        text: FontAwesomeIcons.cloud; font-family: "Font Awesome 6 Free";
+                        font-weight: 900; font-size: 25px;
+                        color: root.server-setup-provider == 1 ? #2866c9 : #52657f;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 12px; width: parent.width - 118px; height: 24px;
+                        text: "Cloudflare"; font-size: 15px; font-weight: 600;
+                        color: WorkbenchStyle.text; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 38px; width: parent.width - 118px; height: 20px;
+                        text: "Your own Cloudflare signaling backend";
+                        font-size: 11px; color: WorkbenchStyle.muted;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 39px; y: 26px; width: 20px; height: 20px;
+                        border-radius: 10px; border-width: 2px;
+                        border-color: root.server-setup-provider == 1 ? #3275dc : #a5b4c9;
+                        background: root.server-setup-provider == 1 ? #3275dc : white;
+                        if root.server-setup-provider == 1: Rectangle {
+                            x: 6px; y: 6px; width: 8px; height: 8px;
+                            border-radius: 4px; background: white;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.server-setup-provider = 1;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                        }
+                    }
+                }
+                Rectangle {
+                    width: parent.width; height: 72px; border-radius: UiRadius.control;
+                    background: root.server-setup-provider == 0 ? #eaf2ff : white;
+                    border-width: root.server-setup-provider == 0 ? 2px : 1px;
+                    border-color: root.server-setup-provider == 0 ? #3275dc : UiSurface.edge;
+                    Text {
+                        x: 18px; y: 12px; width: 32px; height: 48px;
+                        text: FontAwesomeIcons.globe; font-family: "Font Awesome 6 Free";
+                        font-weight: 900; font-size: 25px;
+                        color: root.server-setup-provider == 0 ? #2866c9 : #52657f;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 12px; width: parent.width - 118px; height: 24px;
+                        text: "CrossDesk Public Server"; font-size: 15px; font-weight: 600;
+                        color: WorkbenchStyle.text; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 38px; width: parent.width - 118px; height: 20px;
+                        text: "Shared signaling server, no setup required";
+                        font-size: 11px; color: WorkbenchStyle.muted;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 39px; y: 26px; width: 20px; height: 20px;
+                        border-radius: 10px; border-width: 2px;
+                        border-color: root.server-setup-provider == 0 ? #3275dc : #a5b4c9;
+                        background: root.server-setup-provider == 0 ? #3275dc : white;
+                        if root.server-setup-provider == 0: Rectangle {
+                            x: 6px; y: 6px; width: 8px; height: 8px;
+                            border-radius: 4px; background: white;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.server-setup-provider = 0;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                        }
+                    }
+                }
+                Rectangle {
+                    width: parent.width; height: 72px; border-radius: UiRadius.control;
+                    background: root.server-setup-provider == 2 ? #eaf2ff : white;
+                    border-width: root.server-setup-provider == 2 ? 2px : 1px;
+                    border-color: root.server-setup-provider == 2 ? #3275dc : UiSurface.edge;
+                    Text {
+                        x: 18px; y: 12px; width: 32px; height: 48px;
+                        text: FontAwesomeIcons.server; font-family: "Font Awesome 6 Free";
+                        font-weight: 900; font-size: 25px;
+                        color: root.server-setup-provider == 2 ? #2866c9 : #52657f;
+                        horizontal-alignment: center; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 12px; width: parent.width - 118px; height: 24px;
+                        text: "Custom Server"; font-size: 15px; font-weight: 600;
+                        color: WorkbenchStyle.text; vertical-alignment: center;
+                    }
+                    Text {
+                        x: 64px; y: 38px; width: parent.width - 118px; height: 20px;
+                        text: "Connect to a compatible self-hosted server";
+                        font-size: 11px; color: WorkbenchStyle.muted;
+                        vertical-alignment: center; overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 39px; y: 26px; width: 20px; height: 20px;
+                        border-radius: 10px; border-width: 2px;
+                        border-color: root.server-setup-provider == 2 ? #3275dc : #a5b4c9;
+                        background: root.server-setup-provider == 2 ? #3275dc : white;
+                        if root.server-setup-provider == 2: Rectangle {
+                            x: 6px; y: 6px; width: 8px; height: 8px;
+                            border-radius: 4px; background: white;
+                        }
+                    }
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.server-setup-provider = 2;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                        }
+                    }
+                }
+            }
+            // Keep fields in a measured, scrollable layout. The dedicated
+            // feedback area below is never laid over a form input.
+            if root.server-setup-page == 1 && !root.server-setup-review-open
+                    && root.server-setup-success-kind == 0
+                    && root.server-setup-reconcile-kind == 0: ScrollView {
+                x: 22px; y: root.server-setup-postconnect ? 130px : 110px; width: parent.width - 44px;
+                height: max(90px, parent.height -
+                    (root.server-setup-error != "" || root.server-setup-status != "" ? 249px : 171px)
+                    - (root.server-setup-postconnect ? 20px : 0px));
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                viewport-height: server-configuration-content.preferred-height;
+                server-configuration-content := VerticalLayout {
+                    // Reserve a full scrollbar gutter so scrolling never
+                    // overlays the textboxes or their right-hand buttons.
+                    width: parent.width - 16px; padding: 0px; spacing: 10px;
+                    if root.server-setup-provider == 0: Text {
+                        width: parent.width; height: 75px; vertical-stretch: 0;
+                        text: "Use the public CrossDesk signaling service. No Cloudflare API token or backend setup is required.";
+                        wrap: word-wrap; color: WorkbenchStyle.text; font-size: 13px;
+                    }
+                    if root.server-setup-provider == 2: VerticalLayout {
+                        width: parent.width; height: 142px; vertical-stretch: 0; spacing: 8px;
+                        Text {
+                            height: 20px; vertical-stretch: 0;
+                            text: "Server host or signaling URL"; color: WorkbenchStyle.text;
+                            vertical-alignment: center;
+                        }
+                        RoundedLineEdit {
+                            width: parent.width; height: 36px; vertical-stretch: 0;
+                            text <=> root.server-setup-host;
+                        }
+                        Text {
+                            height: 20px; vertical-stretch: 0;
+                            text: "Signal port"; color: WorkbenchStyle.text;
+                            vertical-alignment: center;
+                        }
+                        RoundedLineEdit {
+                            width: parent.width; height: 36px; vertical-stretch: 0;
+                            text <=> root.server-setup-port; input-type: InputType.number;
+                        }
+                    }
+                    if root.server-setup-provider == 1: VerticalLayout {
+                        width: parent.width;
+                        height: root.server-setup-cloudflare-method == 1
+                            ? 204px + (root.server-setup-need-worker-url ? 62px : 0px)
+                            : 152px;
+                        vertical-stretch: 0; spacing: 8px;
+                        HorizontalLayout {
+                            width: parent.width; height: 32px; vertical-stretch: 0; spacing: 8px;
+                            SettingsButton {
+                                width: (parent.width - 8px) / 2; height: 32px;
+                                primary: root.server-setup-cloudflare-method == 0;
+                                text: "Existing Worker";
+                                clicked => { root.server-setup-cloudflare-method = 0; root.server-setup-error = ""; root.server-setup-status = ""; }
+                            }
+                            SettingsButton {
+                                width: (parent.width - 8px) / 2; height: 32px;
+                                primary: root.server-setup-cloudflare-method == 1;
+                                text: "Automatic (API Token)";
+                                clicked => { root.server-setup-cloudflare-method = 1; root.server-setup-error = ""; root.server-setup-status = ""; }
+                            }
+                        }
+                        if root.server-setup-cloudflare-method == 0: VerticalLayout {
+                            width: parent.width; height: 112px; vertical-stretch: 0; spacing: 7px;
+                            Text {
+                                height: 18px; vertical-stretch: 0;
+                                text: "HTTPS Worker URL"; color: WorkbenchStyle.text;
+                                vertical-alignment: center;
+                            }
+                            RoundedLineEdit {
+                                width: parent.width; height: 36px; vertical-stretch: 0;
+                                placeholder-text: "https://redesk-signal.example.workers.dev";
+                                text <=> root.server-setup-host;
+                            }
+                            Text {
+                                height: 38px; vertical-stretch: 0;
+                                text: "ReDesk will verify /health before saving the WSS /signal endpoint.";
+                                wrap: word-wrap; color: WorkbenchStyle.muted; font-size: 11px;
+                            }
+                        }
+                        if root.server-setup-cloudflare-method == 1: VerticalLayout {
+                            width: parent.width;
+                            height: 164px + (root.server-setup-need-worker-url ? 62px : 0px);
+                            vertical-stretch: 0; spacing: 5px;
+                            HorizontalLayout {
+                                width: parent.width; height: 24px; vertical-stretch: 0;
+                                spacing: 10px;
+                                Text {
+                                    text: "Cloudflare API Token"; color: WorkbenchStyle.text;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                SettingsButton {
+                                    width: 123px; height: 24px;
+                                    text: "Get API Token";
+                                    quiet: true;
+                                    enabled: !root.server-setup-busy;
+                                    clicked => { root.server-setup-create-token(); }
+                                }
+                            }
+                            HorizontalLayout {
+                                width: parent.width; height: 36px; vertical-stretch: 0; spacing: 8px;
+                                RoundedLineEdit {
+                                    width: parent.width - 88px; height: 36px;
+                                    text <=> root.server-setup-token;
+                                    input-type: root.server-setup-reveal-token ? InputType.text : InputType.password;
+                                    edited => {
+                                        // All discovery hints belong to the old token.
+                                        // A different token starts with a clean form.
+                                        root.server-setup-token-verified = false;
+                                        root.server-setup-need-account = true;
+                                        root.server-setup-need-worker-url = false;
+                                        root.server-setup-account = "";
+                                        root.server-setup-host = "";
+                                        root.server-setup-review-open = false;
+                                        root.server-setup-retry-available = false;
+                                        root.server-setup-confirm-update = false;
+                                        root.server-setup-error = "";
+                                        root.server-setup-status = "";
+                                    }
+                                }
+                                SettingsButton {
+                                    width: 80px; height: 36px;
+                                    text: root.server-setup-reveal-token ? "Hide" : "Show";
+                                    clicked => { root.server-setup-reveal-token = !root.server-setup-reveal-token; }
+                                }
+                            }
+                            VerticalLayout {
+                                width: parent.width; height: 55px; vertical-stretch: 0; spacing: 4px;
+                                Text {
+                                    height: 17px; vertical-stretch: 0;
+                                    text: "Cloudflare Account ID";
+                                    color: WorkbenchStyle.text; font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                RoundedLineEdit {
+                                    width: parent.width; height: 34px; vertical-stretch: 0;
+                                    text <=> root.server-setup-account;
+                                }
+                            }
+                            if root.server-setup-need-worker-url: VerticalLayout {
+                                width: parent.width; height: 55px; vertical-stretch: 0; spacing: 4px;
+                                Text {
+                                    height: 17px; vertical-stretch: 0;
+                                    text: "Worker URL (existing or preferred new workers.dev URL)";
+                                    color: WorkbenchStyle.text; font-size: 11px;
+                                    vertical-alignment: center;
+                                }
+                                RoundedLineEdit {
+                                    width: parent.width; height: 34px; vertical-stretch: 0;
+                                    placeholder-text: "https://redesk-signal.example.workers.dev";
+                                    text <=> root.server-setup-host;
+                                }
+                            }
+                            HorizontalLayout {
+                                width: parent.width; height: 34px; vertical-stretch: 0;
+                                spacing: 8px;
+                                Rectangle { horizontal-stretch: 1; }
+                                SettingsButton {
+                                    width: 188px; height: 34px; primary: true;
+                                    text: root.server-setup-busy ? "Checking..." : "Check Backend";
+                                    enabled: !root.server-setup-busy && root.server-setup-token != "";
+                                    clicked => {
+                                        root.server-setup-validate-token(root.server-setup-token);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if root.server-setup-switch-confirm && root.server-setup-success-kind == 0: Rectangle {
+                x: 22px; y: 110px; width: parent.width - 44px;
+                height: 184px; background: #fff8ec; border-radius: UiRadius.control;
+                border-width: 1px; border-color: #e5bb78;
+                Text {
+                    x: 14px; y: 12px; width: parent.width - 28px; height: 38px;
+                    text: "Confirm signaling server change";
+                    color: WorkbenchStyle.text; font-weight: 600; font-size: 15px;
+                }
+                Text {
+                    x: 14px; y: 49px; width: parent.width - 28px; height: 58px;
+                    text: "Switching signaling servers may prevent devices using the previous backend from discovering each other. Your existing configuration is kept if the change fails.";
+                    wrap: word-wrap; color: WorkbenchStyle.text; font-size: 11px;
+                }
+                HorizontalLayout {
+                    x: 14px; y: 122px; width: parent.width - 28px; height: 34px;
+                    spacing: 8px;
+                    SettingsButton {
+                        width: 110px; height: 34px; text: "Go Back";
+                        clicked => { root.server-setup-switch-confirm = false; }
+                    }
+                    SettingsButton {
+                        width: 170px; height: 34px; primary: true;
+                        text: "Confirm Change";
+                        clicked => {
+                            root.server-setup-switch-confirm = false;
+                            root.server-setup-submit(root.server-setup-provider,
+                                root.server-setup-cloudflare-method, root.server-setup-host,
+                                root.server-setup-port, root.server-setup-token, root.server-setup-account);
+                        }
+                    }
+                }
+            }
+            // Feedback always has its own reserved row above footer actions.
+            // It must not overlap the Account ID input, even at small heights.
+            if root.server-setup-success-kind == 0 && root.server-setup-reconcile-kind == 0
+                    && (root.server-setup-error != "" || root.server-setup-status != ""): Rectangle {
+                x: 22px; y: parent.height - 129px;
+                width: parent.width - 44px; height: 60px;
+                background: root.server-setup-error != "" ? #fff2f2 : #edf4ff;
+                border-width: 1px;
+                border-color: root.server-setup-error != "" ? #ebc8c8 : #c9dbf5;
+                border-radius: UiRadius.control;
+                ScrollView {
+                    x: 10px; y: 7px;
+                    width: parent.width - 20px; height: parent.height - 14px;
+                    viewport-width: self.visible-width;
+                    viewport-height: feedback-message.preferred-height;
+                    horizontal-scrollbar-policy: always-off;
+                    feedback-message := Text {
+                        width: parent.width - 14px;
+                        height: self.preferred-height;
+                        text: root.server-setup-error != ""
+                            ? root.server-setup-error : root.server-setup-status;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                        font-size: 11px;
+                        color: root.server-setup-error != "" ? #b33131 : WorkbenchStyle.text;
+                    }
+                }
+            }
+            HorizontalLayout {
+                x: 22px; y: parent.height - 56px; width: parent.width - 44px; height: 34px; spacing: 10px;
+                if root.server-setup-reconcile-kind != 0: SettingsButton {
+                    width: 120px; text: "Back to Review";
+                    enabled: !root.server-setup-busy;
+                    clicked => {
+                        root.server-setup-reconcile-kind = 0;
+                        root.server-setup-error = "";
+                        root.server-setup-status = "";
+                    }
+                }
+                if root.server-setup-success-kind == 0 && root.server-setup-reconcile-kind == 0: SettingsButton {
+                    width: 84px; text: "Back";
+                    enabled: root.server-setup-page > 0 && !root.server-setup-busy;
+                    clicked => {
+                        root.server-setup-switch-confirm = false;
+                        if root.server-setup-review-open {
+                            root.server-setup-review-open = false;
+                            root.server-setup-confirm-update = false;
+                            root.server-setup-close();
+                            root.server-setup-page = 1;
+                        } else {
+                            root.server-setup-page = 0;
+                        }
+                        root.server-setup-error = "";
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if root.server-setup-success-kind == 0 && root.server-setup-reconcile-kind == 0: SettingsButton {
+                    width: 84px; text: "Cancel";
+                    enabled: !root.server-setup-busy;
+                    clicked => {
+                        root.server-setup-close();
+                        root.server-setup-switch-confirm = false;
+                        root.server-setup-open = false;
+                        root.server-setup-review-open = false;
+                        root.server-setup-retry-available = false;
+                        root.server-setup-reconcile-kind = 0;
+                        root.server-setup-confirm-update = false;
+                        root.server-setup-token = "";
+                        root.server-setup-status = "";
+                    }
+                }
+                if root.server-setup-reconcile-kind != 0: SettingsButton {
+                    width: 170px; height: 34px; primary: true;
+                    text: root.server-setup-busy ? "Repairing..." : "Confirm and Retry";
+                    enabled: !root.server-setup-busy;
+                    clicked => { root.server-setup-decision(4); }
+                }
+                if root.server-setup-reconcile-kind == 0: SettingsButton {
+                    width: 92px; primary: true;
+                    text: root.server-setup-success-kind != 0 ? "Finish"
+                        : root.server-setup-page == 0 ? "Continue"
+                        : root.server-setup-busy ? "Working..." : "Finish";
+                    enabled: !root.server-setup-busy
+                        && (root.server-setup-success-kind != 0
+                            || (!root.server-setup-review-open && !root.server-setup-switch-confirm
+                                && root.server-setup-reconcile-kind == 0
+                                && (root.server-setup-page == 0
+                                    || (root.server-setup-page == 1
+                                        && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1)))));
+                    clicked => {
+                        if root.server-setup-success-kind != 0 {
+                            root.server-setup-close();
+                            root.server-setup-success-kind = 0;
+                            root.server-setup-success-url = "";
+                            root.server-setup-review-open = false;
+                            root.server-setup-token = "";
+                            root.server-setup-status = "";
+                            root.server-setup-open = false;
+                        } else if root.server-setup-page == 0 {
+                            root.server-setup-page = 1;
+                            root.server-setup-error = "";
+                            root.server-setup-status = "";
+                            if root.server-setup-provider == 1 {
+                                root.server-setup-cloudflare-method = 1;
+                                root.server-setup-need-account = true;
+                                root.server-setup-need-worker-url = false;
+                            }
+                        } else if root.server-setup-provider != root.configured-server-provider
+                                || (root.server-setup-provider == 1
+                                    && root.server-setup-cloudflare-method == 0
+                                    && root.server-setup-host != root.configured-server-display) {
+                            // Switching between Cloudflare Workers also changes the
+                            // signaling backend, even when provider type is unchanged.
+                            root.server-setup-switch-confirm = true;
+                        } else {
+                            root.server-setup-submit(root.server-setup-provider,
+                                root.server-setup-cloudflare-method, root.server-setup-host,
+                                root.server-setup-port, root.server-setup-token, root.server-setup-account);
                         }
                     }
                 }

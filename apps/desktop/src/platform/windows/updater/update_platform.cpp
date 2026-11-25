@@ -48,25 +48,25 @@ std::wstring Normalized(const fs::path& path) {
 }
 
 std::wstring LockName(const fs::path& app) {
-  return L"Global\\CrossDeskUpdate-" + Wide(Sha256(fs::path(Normalized(app)).u8string()));
+  return L"Global\\ReDeskUpdate-" + Wide(Sha256(fs::path(Normalized(app)).u8string()));
 }
 
 void StopService() {
   SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
-  if (!manager) throw std::runtime_error("Cannot query CrossDesk service");
-  SC_HANDLE service = OpenServiceW(manager, L"CrossDeskService", SERVICE_STOP | SERVICE_QUERY_STATUS);
+  if (!manager) throw std::runtime_error("Cannot query ReDesk service");
+  SC_HANDLE service = OpenServiceW(manager, L"ReDeskService", SERVICE_STOP | SERVICE_QUERY_STATUS);
   const DWORD error = GetLastError();
   CloseServiceHandle(manager);
   if (!service) {
     if (error == ERROR_SERVICE_DOES_NOT_EXIST) return;
-    throw std::runtime_error("Cannot open CrossDesk service");
+    throw std::runtime_error("Cannot open ReDesk service");
   }
   SERVICE_STATUS_PROCESS status{};
   DWORD bytes = 0;
   if (!QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO,
       reinterpret_cast<BYTE*>(&status), sizeof(status), &bytes)) {
     CloseServiceHandle(service);
-    throw std::runtime_error("Cannot query CrossDesk service state");
+    throw std::runtime_error("Cannot query ReDesk service state");
   }
   service_was_running = status.dwCurrentState == SERVICE_RUNNING ||
                         status.dwCurrentState == SERVICE_START_PENDING;
@@ -74,7 +74,7 @@ void StopService() {
   if (status.dwCurrentState != SERVICE_STOPPED && status.dwCurrentState != SERVICE_STOP_PENDING &&
       !ControlService(service, SERVICE_CONTROL_STOP, &ignored)) {
     CloseServiceHandle(service);
-    throw std::runtime_error("Cannot stop CrossDesk service");
+    throw std::runtime_error("Cannot stop ReDesk service");
   }
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   while (std::chrono::steady_clock::now() < deadline) {
@@ -87,7 +87,7 @@ void StopService() {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
   CloseServiceHandle(service);
-  throw std::runtime_error("CrossDesk service did not stop");
+  throw std::runtime_error("ReDesk service did not stop");
 }
 }  // namespace
 
@@ -99,7 +99,7 @@ fs::path ExecutablePath() {
 }
 
 fs::path HelperPath(const fs::path& application) {
-  return application.parent_path() / L"crossdesk_updater.exe";
+  return application.parent_path() / L"redesk_updater.exe";
 }
 
 bool SupportedInstallation(const fs::path& application) {
@@ -108,10 +108,10 @@ bool SupportedInstallation(const fs::path& application) {
   wchar_t directory[32768];
   DWORD bytes = sizeof(directory);
   if (RegGetValueW(HKEY_LOCAL_MACHINE,
-      L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CrossDesk",
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\ReDesk",
       L"InstallLocation", RRF_RT_REG_SZ | RRF_SUBKEY_WOW6432KEY, nullptr,
       directory, &bytes) != ERROR_SUCCESS) return false;
-  return Normalized(fs::path(directory) / L"CrossDesk.exe") == Normalized(application) &&
+  return Normalized(fs::path(directory) / L"ReDesk.exe") == Normalized(application) &&
          fs::is_regular_file(HelperPath(application));
 }
 
@@ -131,7 +131,7 @@ fs::path PrivateDirectory() {
   PWSTR base = nullptr;
   if (FAILED(SHGetKnownFolderPath(IsPrivileged() ? FOLDERID_ProgramData : FOLDERID_LocalAppData,
       0, nullptr, &base))) throw std::runtime_error("Cannot locate update storage");
-  const fs::path directory = fs::path(base) / (L"CrossDesk-update-" + Wide(RandomId()));
+  const fs::path directory = fs::path(base) / (L"ReDesk-update-" + Wide(RandomId()));
   CoTaskMemFree(base);
   std::wstring acl = IsPrivileged() ? L"O:BAG:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
                                     : L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
@@ -244,32 +244,32 @@ void WaitForApplicationExit(const fs::path& application) {
     if (!running) return;
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   } while (std::chrono::steady_clock::now() < deadline);
-  throw std::runtime_error("CrossDesk is still running in this or another session");
+  throw std::runtime_error("ReDesk is still running in this or another session");
 }
 
 void InstallPackage(const fs::path& package, const fs::path& application) {
   // NSIS requires /D to be the final argument, without quotes around its value.
-  std::wstring command = Quote(package.wstring()) + L" /S /CROSSDESK_UPDATE /D=" +
+  std::wstring command = Quote(package.wstring()) + L" /S /REDESK_UPDATE /D=" +
                          application.parent_path().wstring();
   STARTUPINFOW startup{sizeof(startup)};
   PROCESS_INFORMATION process{};
   const auto cwd = package.parent_path();
   if (!CreateProcessW(package.c_str(), command.data(), nullptr, nullptr, FALSE,
       CREATE_NO_WINDOW, nullptr, cwd.c_str(), &startup, &process))
-    throw std::runtime_error("Cannot start CrossDesk installer");
+    throw std::runtime_error("Cannot start ReDesk installer");
   WaitForSingleObject(process.hProcess, INFINITE);
   DWORD code = 1;
   GetExitCodeProcess(process.hProcess, &code);
   CloseHandle(process.hThread);
   CloseHandle(process.hProcess);
-  if (code != 0) throw std::runtime_error("CrossDesk installer failed: " + std::to_string(code));
+  if (code != 0) throw std::runtime_error("ReDesk installer failed: " + std::to_string(code));
 }
 
 void RestoreServices() {
   if (!service_was_running) return;
   SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
   if (!manager) return;
-  SC_HANDLE service = OpenServiceW(manager, L"CrossDeskService", SERVICE_START);
+  SC_HANDLE service = OpenServiceW(manager, L"ReDeskService", SERVICE_START);
   if (service) { StartServiceW(service, 0, nullptr); CloseServiceHandle(service); }
   CloseServiceHandle(manager);
 }

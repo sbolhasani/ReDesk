@@ -131,6 +131,22 @@ int ConfigCenter::Load() {
   }
   enable_self_hosted_ =
       ini_->GetBoolValue(section_, "enable_self_hosted", enable_self_hosted_);
+  // Existing installations predate this field. They already have a chosen
+  // effective server and must not be interrupted by a first-run wizard.
+  const char* server_selection = ini_->GetValue(section_, "server_selection_completed", nullptr);
+  if (!server_selection) {
+    server_selection_completed_ = true;
+    ini_->SetBoolValue(section_, "server_selection_completed", true);
+    persist_config_migration = true;
+  } else {
+    server_selection_completed_ =
+        ini_->GetBoolValue(section_, "server_selection_completed", false);
+  }
+  const std::string provider = ini_->GetValue(section_, "server_provider",
+      enable_self_hosted_ ? "custom" : "public");
+  server_provider_ = provider == "cloudflare" ? SERVER_PROVIDER::CLOUDFLARE
+                   : provider == "custom" ? SERVER_PROVIDER::CUSTOM
+                   : SERVER_PROVIDER::PUBLIC;
 
   const char* signal_server_host_value =
       ini_->GetValue(section_, "signal_server_host", nullptr);
@@ -153,11 +169,11 @@ int ConfigCenter::Load() {
       ini_->GetBoolValue(section_, "enable_autostart", enable_autostart_);
   enable_daemon_ = ini_->GetBoolValue(section_, "enable_daemon", enable_daemon_);
   enable_privacy_screen_.store(
-      ini_->GetBoolValue(section_, "enable_privacy_screen", true));
+      ini_->GetBoolValue(section_, "enable_privacy_screen", false));
   privacy_local_unlock_allowed_.store(
       ini_->GetBoolValue(section_, "privacy_local_unlock_allowed", true));
   lock_on_disconnect_.store(
-      ini_->GetBoolValue(section_, "lock_on_disconnect", true));
+      ini_->GetBoolValue(section_, "lock_on_disconnect", false));
   trusted_devices_only_.store(
       ini_->GetValue(section_, "trusted_devices_only", nullptr) != nullptr &&
       ini_->GetBoolValue(section_, "trusted_devices_only", true));
@@ -248,6 +264,10 @@ int ConfigCenter::Save() {
                     turn_mode_ != TURN_MODE::DISABLED);
   ini_->SetBoolValue(section_, "enable_srtp", true);
   ini_->SetBoolValue(section_, "enable_self_hosted", enable_self_hosted_);
+  ini_->SetBoolValue(section_, "server_selection_completed", server_selection_completed_);
+  ini_->SetValue(section_, "server_provider",
+      server_provider_ == SERVER_PROVIDER::CLOUDFLARE ? "cloudflare"
+      : server_provider_ == SERVER_PROVIDER::CUSTOM ? "custom" : "public");
 
   // only save when self hosted
   if (enable_self_hosted_) {
@@ -314,7 +334,7 @@ int ConfigCenter::ApplySharedHostConfig(const std::string& contents) {
   const long turn = host.GetLongValue(section_, "turn_mode", static_cast<long>(turn_mode_));
   const long codec = host.GetLongValue(section_, "video_encode_format", static_cast<long>(video_encode_format_));
   const bool trusted = host.GetBoolValue(section_, "trusted_devices_only", false);
-  const bool lock = host.GetBoolValue(section_, "lock_on_disconnect", true);
+  const bool lock = host.GetBoolValue(section_, "lock_on_disconnect", false);
   MiniRtcSignalServerAddress address{};
   if (!IsValidTurnModeValue(turn) || codec < 0 || codec > 1 ||
       (self_hosted && (port < 1 || port > 65535 ||
@@ -424,10 +444,59 @@ int ConfigCenter::SetServerPort(int port) {
   return 0;
 }
 
+int ConfigCenter::SelectServer(SERVER_PROVIDER provider,
+                               const std::string& host, int port) {
+  const bool self_hosted = provider != SERVER_PROVIDER::PUBLIC;
+  if (self_hosted) {
+    if (host.empty() || port < 1 || port > 65535 ||
+        host.size() > 255 || host.find_first_of("\r\n\t @?#") != std::string::npos)
+      return -1;
+    MiniRtcSignalServerAddress address{};
+    if (MiniRtcParseSignalServerAddress(host.data(), host.size(), &address) != 0)
+      return -1;
+    if (provider == SERVER_PROVIDER::CLOUDFLARE &&
+        (port != 443 || std::string(address.target) != "/signal"))
+      return -1;
+  }
+  const std::string provider_name =
+      provider == SERVER_PROVIDER::CLOUDFLARE ? "cloudflare" :
+      provider == SERVER_PROVIDER::CUSTOM ? "custom" : "public";
+  // Persist as a single transaction before updating the in-memory view.
+  if (StoreValues({{"server_provider", provider_name},
+                   {"server_selection_completed", "true"},
+                   {"enable_self_hosted", self_hosted ? "true" : "false"},
+                   {"signal_server_host", self_hosted ? host : signal_server_host_},
+                   {"signal_server_port", std::to_string(self_hosted ? port : signal_server_port_)}}) != 0)
+    return -1;
+  server_provider_ = provider;
+  server_selection_completed_ = true;
+  enable_self_hosted_ = self_hosted;
+  if (self_hosted) {
+    signal_server_host_ = host;
+    signal_server_port_ = port;
+  }
+  return 0;
+}
+
+bool ConfigCenter::IsServerSelectionCompleted() const {
+  return server_selection_completed_;
+}
+ConfigCenter::SERVER_PROVIDER ConfigCenter::GetServerProvider() const {
+  return server_provider_;
+}
+
 int ConfigCenter::SetSelfHosted(bool enabled) {
   if (enabled && (signal_server_host_.empty() || signal_server_port_ < 1 || signal_server_port_ > 65535)) return -1;
-  if (StoreValues({{"enable_self_hosted", enabled ? "true" : "false"}}) != 0) return -1;
+  // Legacy Settings uses this setter for unrelated preferences too. Preserve
+  // the Cloudflare provider when the enabled state is unchanged.
+  if (enabled == enable_self_hosted_) return 0;
+  const auto provider = enabled ? SERVER_PROVIDER::CUSTOM : SERVER_PROVIDER::PUBLIC;
+  if (StoreValues({{"enable_self_hosted", enabled ? "true" : "false"},
+                   {"server_provider", enabled ? "custom" : "public"},
+                   {"server_selection_completed", "true"}}) != 0) return -1;
   enable_self_hosted_ = enabled;
+  server_provider_ = provider;
+  server_selection_completed_ = true;
   return 0;
 }
 
