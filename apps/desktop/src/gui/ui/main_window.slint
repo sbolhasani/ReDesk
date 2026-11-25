@@ -804,6 +804,9 @@ export component MainWindow inherits Window {
     in-out property <bool> server-setup-cloudflare-configured: false;
     in-out property <int> configured-server-provider: 0;
     in-out property <string> configured-server-host: "";
+    in-out property <string> configured-server-display: "";
+    in-out property <bool> configured-server-copied: false;
+    callback copy-configured-server-address() -> bool;
     in-out property <bool> server-setup-switch-confirm: false;
     in-out property <bool> server-setup-postconnect: false;
     in-out property <string> server-setup-deployed-version: "Unknown";
@@ -3144,10 +3147,21 @@ export component MainWindow inherits Window {
                                     font-weight: 600; vertical-alignment: center;
                                 }
                                 Text {
-                                    x: 12px; y: 44px; width: parent.width - 24px; height: 18px;
-                                    text: root.configured-server-host;
+                                    x: 12px; y: 44px;
+                                    width: root.configured-server-provider == 0
+                                        ? parent.width - 24px : parent.width - 100px;
+                                    height: 18px;
+                                    text: root.configured-server-display;
                                     color: WorkbenchStyle.muted; font-size: 11px;
                                     overflow: elide; vertical-alignment: center;
+                                }
+                                if root.configured-server-provider != 0 && root.configured-server-display != "": SettingsButton {
+                                    x: parent.width - 82px; y: 40px;
+                                    width: 70px; height: 26px;
+                                    text: root.configured-server-copied ? "Copied" : "Copy";
+                                    clicked => {
+                                        root.configured-server-copied = root.copy-configured-server-address();
+                                    }
                                 }
                                 SettingsButton {
                                     x: 12px; y: 66px;
