@@ -4754,7 +4754,12 @@ export component MainWindow inherits Window {
                                 root.server-setup-need-account = true;
                                 root.server-setup-need-worker-url = false;
                             }
-                        } else if root.server-setup-provider != root.configured-server-provider {
+                        } else if root.server-setup-provider != root.configured-server-provider
+                                || (root.server-setup-provider == 1
+                                    && root.server-setup-cloudflare-method == 0
+                                    && root.server-setup-host != root.configured-server-display) {
+                            // Switching between Cloudflare Workers also changes the
+                            // signaling backend, even when provider type is unchanged.
                             root.server-setup-switch-confirm = true;
                         } else {
                             root.server-setup-submit(root.server-setup-provider,
