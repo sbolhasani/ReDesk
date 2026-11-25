@@ -1,6 +1,7 @@
 #include "signal_peer.h"
 #include "capture_source.h"
 #include <remote_action.h>
+#include <app_version.h>
 #include <windows.h>
 #include <chrono>
 #include <cstdlib>
@@ -19,6 +20,10 @@ int main(int argc, char** argv) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if (MiniRtcConfigureLogging(MiniRtcLogOff, nullptr, nullptr) != 0) return EXIT_FAILURE;
     try {
+        if (!crossdesk::IsValidAppVersion(CROSSDESK_VERSION)) {
+            std::cerr << "Invalid configured host build version\n";
+            return EXIT_FAILURE;
+        }
         CaptureSource capture;
         capture.initialize(15);
         SignalPeer peer(argv[1], "", "", DeviceKey::generate());
@@ -60,7 +65,7 @@ int main(int argc, char** argv) {
 
         const auto& d = capture.displays().front();
         auto info = crossdesk::MakeHostInformation("ReDesk Host (view test)",
-            {{d.name,d.left,d.top,d.right,d.bottom}},false,"",crossdesk::HostPlatform::Windows);
+            {{d.name,d.left,d.top,d.right,d.bottom}},false,CROSSDESK_VERSION,crossdesk::HostPlatform::Windows);
         std::string message;
         try { message = info.to_json(); }
         catch (...) { crossdesk::FreeRemoteAction(info); throw; }

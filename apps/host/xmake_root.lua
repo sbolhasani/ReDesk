@@ -54,6 +54,8 @@ if has_config("REDESK_HOST_TRANSPORT_PROBE") then
         set_kind("binary")
         set_default(false)
         add_deps("minirtc", "crossdesk_wire")
+        -- Advertise the actual shared build version, not an empty legacy version.
+        add_defines("CROSSDESK_VERSION=\"" .. (get_config("CROSSDESK_VERSION") or "1.7.6") .. "\"")
         add_defines("UNICODE", "_UNICODE", "NOMINMAX", "WIN32_LEAN_AND_MEAN")
         add_packages("openssl3", "nlohmann_json", "spdlog", "libyuv")
         add_includedirs(path.join(root, "apps/host/core"),
