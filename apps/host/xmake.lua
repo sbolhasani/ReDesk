@@ -15,3 +15,22 @@ target("redesk-host-runtime-test")
     add_includedirs("core")
     add_files("tests/server_runtime_test.cpp")
 target_end()
+
+target("redesk-host-settings-test")
+    set_kind("binary")
+    add_includedirs("core")
+    add_files("tests/host_settings_test.cpp")
+target_end()
+
+if is_plat("windows") then
+    target("redesk-host-windows-settings-test")
+        set_kind("binary")
+        set_runtimes("MT")
+        add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN", "UNICODE", "_UNICODE")
+        add_includedirs("core", "platform/windows")
+        add_files("tests/windows_settings_test.cpp",
+                  "platform/windows/settings_protection.cpp",
+                  "platform/windows/settings_store.cpp")
+        add_syslinks("Crypt32", "Advapi32", "Bcrypt", "Shell32", "Ole32", "Uuid")
+    target_end()
+end
