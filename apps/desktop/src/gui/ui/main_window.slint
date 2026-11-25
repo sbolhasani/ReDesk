@@ -4025,44 +4025,47 @@ export component MainWindow inherits Window {
                     + "    Bundled: " + root.server-setup-bundled-version;
                 color: WorkbenchStyle.muted; font-size: 11px;
             }
-            if root.server-setup-reconcile-kind != 0: VerticalLayout {
-                x: 22px; y: 113px; width: parent.width - 44px;
-                spacing: 16px;
-                Text {
-                    text: "Confirm TURN setup recovery";
-                    color: #9c4720; font-size: 17px; font-weight: 600;
-                }
-                Text {
-                    text: root.server-setup-reconcile-kind == 1
-                        ? "Cloudflare no longer has the TURN key, but this PC still has its encrypted recovery file."
-                        : "Cloudflare still has a ReDesk TURN key whose secret is unavailable. Replacing it may interrupt other clients using that key.";
-                    font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
-                }
-                Text {
-                    text: root.server-setup-reconcile-kind == 1
-                        ? "After confirmation: delete only this account's obsolete local encrypted TURN recovery file, then create a new ReDesk backend."
-                        : "After confirmation: delete the single verified orphaned ReDesk TURN key in this account, then generate a new key and continue setup.";
-                    font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
-                }
-                Text {
-                    text: "Cloudflare Worker, Durable Object and unrelated TURN keys will NOT be deleted. The account and key identities will be checked again before cleanup.";
-                    font-size: 12px; color: WorkbenchStyle.muted; wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    height: 36px; spacing: 10px;
-                    SettingsButton {
-                        width: 126px; height: 34px; text: "Back to Review";
-                        enabled: !root.server-setup-busy;
-                        clicked => {
-                            root.server-setup-reconcile-kind = 0;
-                            root.server-setup-error = "";
-                        }
+            // Reconciliation is a separate step. Only its body scrolls;
+            // footer actions stay visible at the bottom of the dialog.
+            if root.server-setup-reconcile-kind != 0: ScrollView {
+                x: 22px; y: 110px; width: parent.width - 44px;
+                height: max(90px, parent.height - 190px);
+                viewport-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+                viewport-height: reconcile-content.preferred-height;
+                reconcile-content := VerticalLayout {
+                    width: parent.width - 16px;
+                    height: self.preferred-height;
+                    padding: 0px; spacing: 14px;
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: "Confirm TURN setup recovery";
+                        color: #9c4720; font-size: 17px; font-weight: 600;
+                        wrap: word-wrap;
                     }
-                    SettingsButton {
-                        width: 190px; height: 34px; primary: true;
-                        text: root.server-setup-busy ? "Repairing..." : "Confirm and Retry";
-                        enabled: !root.server-setup-busy;
-                        clicked => { root.server-setup-decision(4); }
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: root.server-setup-reconcile-kind == 1
+                            ? "Cloudflare no longer has the TURN key, but this PC still has its encrypted recovery file."
+                            : "Cloudflare still has a ReDesk TURN key whose secret is unavailable. Replacing it may interrupt other clients using that key.";
+                        font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
+                    }
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: root.server-setup-reconcile-kind == 1
+                            ? "After confirmation: delete only this account's obsolete local encrypted TURN recovery file, then create a new ReDesk backend."
+                            : "After confirmation: delete the single verified orphaned ReDesk TURN key in this account, then generate a new key and continue setup.";
+                        font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
+                    }
+                    Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: "Cloudflare Worker, Durable Object and unrelated TURN keys will NOT be deleted. The account and key identities will be checked again before cleanup.";
+                        font-size: 12px; color: WorkbenchStyle.muted; wrap: word-wrap;
+                    }
+                    if root.server-setup-busy: Text {
+                        width: parent.width; height: self.preferred-height;
+                        text: "Rechecking Cloudflare state and continuing setup...";
+                        font-size: 12px; color: WorkbenchStyle.muted; wrap: word-wrap;
                     }
                 }
             }
@@ -4557,7 +4560,8 @@ export component MainWindow inherits Window {
             }
             // Feedback always has its own reserved row above footer actions.
             // It must not overlap the Account ID input, even at small heights.
-            if root.server-setup-success-kind == 0 && (root.server-setup-error != "" || root.server-setup-status != ""): Rectangle {
+            if root.server-setup-success-kind == 0 && root.server-setup-reconcile-kind == 0
+                    && (root.server-setup-error != "" || root.server-setup-status != ""): Rectangle {
                 x: 22px; y: parent.height - 129px;
                 width: parent.width - 44px; height: 60px;
                 background: root.server-setup-error != "" ? #fff2f2 : #edf4ff;
