@@ -109,6 +109,11 @@ class CloudflareProvisioningService {
   // after independently verifying that Worker and ReDesk TURN keys are absent.
   Result DiscardOrphanTurnRecovery(const std::string& api_token,
                                   const std::string& account_id) const;
+  // Confirmed, narrowly scoped cleanup of a ReDesk TURN key with no
+  // recoverable secret. Requires proof of Worker absence and a single matching
+  // key; never removes Workers, Durable Objects or account-level settings.
+  Result DeleteOrphanTurnKey(const std::string& api_token,
+                            const std::string& account_id) const;
   Result ConfigureExisting(const SetupOptions& options,
                            std::string* signal_address) const;
   // Fresh deployment only. Existing Worker/TURN state always requires a
