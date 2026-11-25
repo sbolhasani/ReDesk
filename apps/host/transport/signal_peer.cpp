@@ -1,5 +1,6 @@
 #include "signal_peer.h"
 #include <stream_names.h>
+#include <file_transfer_format.h>
 #include <display_stream_id.h>
 #include <algorithm>
 #include <cstring>
@@ -59,8 +60,8 @@ void SignalPeer::start() {
     peer_ = MiniRtcCreatePeer(&params_);
     if (!peer_) throw std::runtime_error("Cannot allocate signaling peer");
     if (!expected_viewer_.empty()) {
-        // Keep wire-compatible negotiation; only opt-in input is received.
-        // No audio, file or clipboard operations are implemented.
+        // Keep existing wire stream negotiation; feature permissions are
+        // enforced separately after local approval.
         if (MiniRtcAddVideoStream(peer_, "Display1") != 0 ||
             MiniRtcAddAudioStream(peer_, crossdesk::kAudioStream) != 0 ||
             MiniRtcAddDataStream(peer_, crossdesk::kDataStream, false) != 0 ||
@@ -86,6 +87,7 @@ void SignalPeer::stop() noexcept {
         status_.revoked = true;
         status_.viewer_connected = false;
         input_.clear();
+        files_.clear();
         clipboard_.reset();
     }
     if (peer_) MiniRtcDestroyPeer(&peer_);
@@ -200,7 +202,7 @@ void SignalPeer::net_status(const char*, size_t, MiniRtcTraversalMode, const Min
                              const char*, size_t, void*) noexcept {
     // The initial report may carry ID@password. Do not log or expose it.
 }
-void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input, bool allow_clipboard, bool allow_audio) {
+void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input, bool allow_clipboard, bool allow_audio, bool allow_files) {
     if (started_ || !login_id_.empty() || viewer_id.rfind("C-",0) != 0 ||
         viewer_id.size() <= 2 || !valid_id(std::string_view(viewer_id).substr(2)))
         throw std::invalid_argument("Expected C-<viewer numeric ID> for a fresh test registration");
@@ -208,8 +210,9 @@ void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input, bool
     allow_input_ = allow_input;
     allow_clipboard_ = allow_input && allow_clipboard;
     allow_audio_ = allow_audio;
+    allow_files_ = allow_input && allow_files;
     audio_requested_ = allow_audio;
-    if (allow_input_ || allow_audio_) params_.on_receive_data_buffer = receive_input;
+    if (allow_input_ || allow_audio_ || allow_files_) params_.on_receive_data_buffer = receive_input;
 }
 std::string SignalPeer::take_registration_password() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -249,12 +252,28 @@ void SignalPeer::receive_input(const char* data, size_t size, const char* id, si
             std::string_view(id,id_size) != self.expected_viewer_) return;
         const std::string_view stream(source, source_size);
         const bool clip = stream == crossdesk::kClipboardStream;
+        const bool file = stream == crossdesk::kFileStream || stream == crossdesk::kFileFeedbackStream;
         const bool audio_control = stream == crossdesk::kControlStream ||
                                    stream == crossdesk::kWebControlStream;
-        if (!clip && (size > 32768 || (!audio_control && stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream))) return;
+        if (!clip && !file && (size > 32768 || (!audio_control && stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream))) return;
         std::lock_guard<std::mutex> lock(self.mutex_);
         if (!self.approved_ || self.status_.revoked ||
             !self.status_.viewer_connected || self.status_.state != MiniRtcSignalConnected) return;
+        if (file) {
+            if (!self.allow_files_ || self.status_.file_queue_failed) return;
+            if (stream == crossdesk::kFileFeedbackStream && size != sizeof(crossdesk::FileTransferAck)) return;
+            if (stream == crossdesk::kFileStream &&
+                (size < sizeof(crossdesk::FileChunkHeader) ||
+                 size > crossdesk::kFileChunkSize + sizeof(crossdesk::FileChunkHeader) + 240)) return;
+            // Independent 4 MiB-ish queue; overload cancels files, not desktop control.
+            if (self.files_.size() >= 64) {
+                self.status_.file_queue_failed = true;
+                self.files_.clear();
+                return;
+            }
+            self.files_.push_back({std::string(stream),std::string(data,size)});
+            return;
+        }
         if (audio_control) {
             // This probe advertises no preview negotiation. Only the legacy
             // audio_capture command is actionable; ignore preview subscriptions.
@@ -353,5 +372,38 @@ bool SignalPeer::request_test_password(const std::string& password) {
 SignalPeer::PasswordResult SignalPeer::password_result() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return password_result_;
+}
+std::vector<SignalPeer::InputMessage> SignalPeer::take_files() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<InputMessage> result;
+    if (!allow_files_ || status_.file_queue_failed || !approved_ || status_.revoked ||
+        !status_.viewer_connected || status_.state != MiniRtcSignalConnected) {
+        files_.clear();
+        return result;
+    }
+    const auto count = (std::min)(files_.size(),std::size_t{8});
+    result.reserve(count);
+    for (std::size_t i=0;i<count;++i) {
+        result.push_back(std::move(files_.front()));
+        files_.pop_front();
+    }
+    return result;
+}
+int SignalPeer::send_file_data(const char* stream,const char* data,std::size_t size) {
+    if (!peer_ || !data || !size || !stream) return -1;
+    const std::string_view label(stream);
+    if (label != crossdesk::kFileStream && label != crossdesk::kFileFeedbackStream) return -1;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!allow_files_ || status_.file_queue_failed || !approved_ || status_.revoked ||
+            !status_.viewer_connected || status_.state != MiniRtcSignalConnected) return -1;
+    }
+    return MiniRtcSendReliableDataFrameToPeer(peer_,data,size,stream,
+        expected_viewer_.data(),expected_viewer_.size());
+}
+void SignalPeer::disable_files() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    status_.file_queue_failed = true;
+    files_.clear();
 }
 }

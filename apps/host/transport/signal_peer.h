@@ -22,6 +22,7 @@ public:
         std::string device_id;
         bool viewer_connected = false;
         bool revoked = false;
+        bool file_queue_failed = false;
         std::uint64_t audio_commands = 0;
         std::uint64_t control_messages = 0;
     };
@@ -29,9 +30,12 @@ public:
     ~SignalPeer();
     // Before start(), restrict a temporary registration to a specific desktop
     // viewer identity. Only one join is accepted in this peer's lifetime.
-    void enable_view_probe(std::string viewer_id, bool allow_input = false, bool allow_clipboard = false, bool allow_audio = false);
+    void enable_view_probe(std::string viewer_id, bool allow_input = false, bool allow_clipboard = false, bool allow_audio = false, bool allow_files = false);
     struct InputMessage { std::string stream, payload; };
     std::vector<InputMessage> take_input();
+    std::vector<InputMessage> take_files();
+    int send_file_data(const char* stream, const char* data, std::size_t size);
+    void disable_files();
     std::optional<std::string> take_clipboard();
     bool send_clipboard(const std::string& text);
     bool audio_requested() const;
@@ -73,6 +77,8 @@ private:
     std::deque<InputMessage> input_;
     bool allow_clipboard_ = false;
     bool allow_audio_ = false;
+    bool allow_files_ = false;
+    std::deque<InputMessage> files_;
     bool audio_requested_ = false;
     PasswordResult password_result_ = PasswordResult::NotRequested;
     std::optional<std::string> clipboard_;
