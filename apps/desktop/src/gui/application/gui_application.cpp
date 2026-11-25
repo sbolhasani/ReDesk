@@ -1887,6 +1887,21 @@ void GuiApplication::BindMainCallbacks(bool gallery_window) {
     else MinimizeMainWindowToTray();
     main->hide();
   });
+  main->on_request_application_exit([this, main] {
+    if (!ui_) return;
+    // Includes LAN, incoming controllers and outgoing remote sessions.
+    // With no active session, Exit is immediate and never minimizes to tray.
+    if (HasActiveSession()) {
+      main->set_exit_confirm_open(true);
+    } else {
+      exit_ = true;
+    }
+  });
+  main->on_confirm_application_exit([this] {
+    // The user explicitly approved disconnecting any active sessions.
+    // Tick() performs the normal graceful shutdown and releases the tray.
+    exit_ = true;
+  });
   main->on_copy_local_id([this] {
     if (!SDL_SetClipboardText(client_id_)) {
       LOG_WARN("Copy local id failed: {}", SDL_GetError());
