@@ -61,6 +61,13 @@ if has_config("REDESK_HOST_TRANSPORT_PROBE") then
         add_includedirs(path.join(root, "apps/host/core"),
             path.join(root, "apps/host/transport"),
             path.join(root, "apps/host/platform/windows"),
+            path.join(root, "apps/desktop/src/device_controller"),
+            path.join(root, "apps/desktop/src/platform/common/input"),
+            path.join(root, "apps/desktop/src/platform/windows"),
+            path.join(root, "apps/desktop/src/platform/windows/input"),
+            path.join(root, "apps/desktop/src/platform/windows/input/mouse"),
+            path.join(root, "apps/desktop/src/platform/windows/input/keyboard"),
+            path.join(root, "apps/desktop/src/platform/windows/service"),
             path.join(root, "apps/desktop/src/gui"),
             path.join(root, "apps/desktop/src/common"),
             path.join(root, "apps/desktop/src/log"),
@@ -71,9 +78,12 @@ if has_config("REDESK_HOST_TRANSPORT_PROBE") then
         add_files(path.join(root, "apps/host/transport/signal_peer.cpp"),
             path.join(root, "apps/host/platform/windows/capture_source.cpp"),
             path.join(root, "apps/host/tests/view_probe.cpp"),
+            path.join(root, "apps/desktop/src/platform/windows/input/windows_input_injector.cpp"),
+            path.join(root, "apps/desktop/src/platform/windows/input/mouse/mouse_controller.cpp"),
+            path.join(root, "apps/desktop/src/platform/windows/input/keyboard/keyboard_capturer.cpp"),
             path.join(root, "apps/desktop/src/log/rd_log.cpp"),
             path.join(root, "apps/desktop/src/screen_capturer/captured_nv12_frame.cpp"),
             path.join(root, "apps/desktop/src/platform/windows/screen_capturer/screen_capturer_gdi.cpp"))
-        add_syslinks("User32", "Gdi32")
+        add_syslinks("User32", "Gdi32", "Wtsapi32")
     target_end()
 end

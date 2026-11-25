@@ -4,6 +4,8 @@
 #include "runtime/device_login.h"
 #include <minirtc.h>
 #include <mutex>
+#include <deque>
+#include <vector>
 #include <string>
 
 namespace redesk::host {
@@ -11,7 +13,7 @@ namespace redesk::host {
 // Owns a single signaling peer. The owner thread is the only thread allowed
 // to start/stop or call MiniRTC APIs. Callbacks only publish bounded snapshots.
 // Signaling-only by default. The opt-in, single-viewer diagnostic can send
-// primary-display video only after local confirmation; no incoming data handler.
+// primary-display video and optional input only after local confirmation.
 class SignalPeer {
 public:
     struct Status {
@@ -24,7 +26,9 @@ public:
     ~SignalPeer();
     // Before start(), restrict a temporary registration to a specific desktop
     // viewer identity. Only one join is accepted in this peer's lifetime.
-    void enable_view_probe(std::string viewer_id);
+    void enable_view_probe(std::string viewer_id, bool allow_input = false);
+    struct InputMessage { std::string stream, payload; };
+    std::vector<InputMessage> take_input();
     std::string take_registration_password();
     bool approve_viewer();
     bool send_host_info(const std::string& message);
@@ -40,6 +44,7 @@ private:
     static int exchange(MiniRtcSignalExchangeStage, const char*, size_t, char*, size_t, void*) noexcept;
     static void signal_status(MiniRtcSignalStatus, const char*, size_t, void*) noexcept;
     static void connection_status(MiniRtcConnectionStatus, const char*, size_t, void*) noexcept;
+    static void receive_input(const char*, size_t, const char*, size_t, const char*, size_t, void*) noexcept;
     static void net_status(const char*, size_t, MiniRtcTraversalMode, const MiniRtcNetTrafficStats*,
                            const char*, size_t, void*) noexcept;
     std::string login_id_;
@@ -54,5 +59,7 @@ private:
     std::string registration_password_;
     bool join_seen_ = false;
     bool approved_ = false;
+    bool allow_input_ = false;
+    std::deque<InputMessage> input_;
 };
 }

@@ -59,8 +59,8 @@ void SignalPeer::start() {
     peer_ = MiniRtcCreatePeer(&params_);
     if (!peer_) throw std::runtime_error("Cannot allocate signaling peer");
     if (!expected_viewer_.empty()) {
-        // Keep wire-compatible stream negotiation, but never register an
-        // incoming data callback or send audio/files/clipboard/input.
+        // Keep wire-compatible negotiation; only opt-in input is received.
+        // No audio, file or clipboard operations are implemented.
         if (MiniRtcAddVideoStream(peer_, "Display1") != 0 ||
             MiniRtcAddAudioStream(peer_, crossdesk::kAudioStream) != 0 ||
             MiniRtcAddDataStream(peer_, crossdesk::kDataStream, false) != 0 ||
@@ -85,6 +85,7 @@ void SignalPeer::stop() noexcept {
         approved_ = false;
         status_.revoked = true;
         status_.viewer_connected = false;
+        input_.clear();
     }
     if (peer_) MiniRtcDestroyPeer(&peer_);
 }
@@ -187,11 +188,13 @@ void SignalPeer::net_status(const char*, size_t, MiniRtcTraversalMode, const Min
                              const char*, size_t, void*) noexcept {
     // The initial report may carry ID@password. Do not log or expose it.
 }
-void SignalPeer::enable_view_probe(std::string viewer_id) {
+void SignalPeer::enable_view_probe(std::string viewer_id, bool allow_input) {
     if (started_ || !login_id_.empty() || viewer_id.rfind("C-",0) != 0 ||
         viewer_id.size() <= 2 || !valid_id(std::string_view(viewer_id).substr(2)))
         throw std::invalid_argument("Expected C-<viewer numeric ID> for a fresh test registration");
     expected_viewer_ = std::move(viewer_id);
+    allow_input_ = allow_input;
+    if (allow_input_) params_.on_receive_data_buffer = receive_input;
 }
 std::string SignalPeer::take_registration_password() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -221,5 +224,44 @@ bool SignalPeer::send_frame(const MiniRtcVideoFrame& frame) {
     outgoing.captured_timestamp = now > 0 ? static_cast<uint64_t>(now) : 0;
     return MiniRtcSendVideoFrameToPeer(peer_, &outgoing, "Display1",
         expected_viewer_.data(), expected_viewer_.size()) == 0;
+}
+void SignalPeer::receive_input(const char* data, size_t size, const char* id, size_t id_size,
+                               const char* source, size_t source_size, void* context) noexcept {
+    try {
+        if (!context || !data || !id || !source || !size || size > 32768) return;
+        auto& self = *static_cast<SignalPeer*>(context);
+        if (id_size != self.expected_viewer_.size() ||
+            std::string_view(id,id_size) != self.expected_viewer_) return;
+        const std::string_view stream(source, source_size);
+        if (stream != crossdesk::kMouseStream && stream != crossdesk::kKeyboardStream) return;
+        std::lock_guard<std::mutex> lock(self.mutex_);
+        if (!self.allow_input_ || !self.approved_ || self.status_.revoked ||
+            !self.status_.viewer_connected || self.status_.state != MiniRtcSignalConnected) return;
+        if (self.input_.size() >= 128) {
+            // Fail closed on overload; the owner releases held input.
+            self.approved_ = false;
+            self.status_.revoked = true;
+            self.input_.clear();
+            return;
+        }
+        self.input_.push_back({std::string(stream), std::string(data,size)});
+    } catch (...) {
+        // The callback never injects input or logs payloads.
+    }
+}
+std::vector<SignalPeer::InputMessage> SignalPeer::take_input() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<InputMessage> result;
+    if (allow_input_ && approved_ && !status_.revoked && status_.viewer_connected &&
+        status_.state == MiniRtcSignalConnected) {
+        result.reserve(input_.size());
+        while (!input_.empty()) {
+            result.push_back(std::move(input_.front()));
+            input_.pop_front();
+        }
+    } else {
+        input_.clear();
+    }
+    return result;
 }
 }
