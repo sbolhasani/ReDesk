@@ -3254,7 +3254,8 @@ void GuiApplication::Tick() {
           (result.setup_completion_kind != 0 || result.setup_retry_attempt) &&
           !ui_->server_setup_pending_token.empty() &&
           ui_->server_setup_review.ok);
-      window->set_server_setup_error(result.message.c_str());
+      if (result.reconcile_kind == 0)
+        window->set_server_setup_error(result.message.c_str());
     } else if (config_center_->SelectServer(
             ConfigCenter::SERVER_PROVIDER::CLOUDFLARE,
             result.endpoint, 443) != 0) {
