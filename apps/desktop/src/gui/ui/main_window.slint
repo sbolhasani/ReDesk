@@ -811,6 +811,8 @@ export component MainWindow inherits Window {
     callback server-setup-manage-worker();
     in-out property <bool> server-setup-review-open: false;
     in-out property <bool> server-setup-retry-available: false;
+    // Explicit approval for repairing abandoned TURN state.
+    in-out property <int> server-setup-reconcile-kind: 0;
     // 0 = normal, 1 = installed, 2 = resumed TURN, 3 = updated, 4 = existing.
     in-out property <int> server-setup-success-kind: 0;
     in-out property <string> server-setup-success-url: "";
@@ -3084,6 +3086,7 @@ export component MainWindow inherits Window {
                                         root.server-setup-success-kind = 0;
                                         root.server-setup-success-url = "";
                                         root.server-setup-retry-available = false;
+                                        root.server-setup-reconcile-kind = 0;
                                         root.server-setup-open = true;
                                         root.server-setup-page = 0;
                                     }
@@ -4022,6 +4025,47 @@ export component MainWindow inherits Window {
                     + "    Bundled: " + root.server-setup-bundled-version;
                 color: WorkbenchStyle.muted; font-size: 11px;
             }
+            if root.server-setup-reconcile-kind != 0: VerticalLayout {
+                x: 22px; y: 113px; width: parent.width - 44px;
+                spacing: 16px;
+                Text {
+                    text: "Confirm TURN setup recovery";
+                    color: #9c4720; font-size: 17px; font-weight: 600;
+                }
+                Text {
+                    text: root.server-setup-reconcile-kind == 1
+                        ? "Cloudflare no longer has the TURN key, but this PC still has its encrypted recovery file."
+                        : "Cloudflare still has a ReDesk TURN key whose secret is unavailable. Replacing it may interrupt other clients using that key.";
+                    font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
+                }
+                Text {
+                    text: root.server-setup-reconcile-kind == 1
+                        ? "After confirmation: delete only this account's obsolete local encrypted TURN recovery file, then create a new ReDesk backend."
+                        : "After confirmation: delete the single verified orphaned ReDesk TURN key in this account, then generate a new key and continue setup.";
+                    font-size: 13px; color: WorkbenchStyle.text; wrap: word-wrap;
+                }
+                Text {
+                    text: "Cloudflare Worker, Durable Object and unrelated TURN keys will NOT be deleted. The account and key identities will be checked again before cleanup.";
+                    font-size: 12px; color: WorkbenchStyle.muted; wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    height: 36px; spacing: 10px;
+                    SettingsButton {
+                        width: 126px; height: 34px; text: "Back to Review";
+                        enabled: !root.server-setup-busy;
+                        clicked => {
+                            root.server-setup-reconcile-kind = 0;
+                            root.server-setup-error = "";
+                        }
+                    }
+                    SettingsButton {
+                        width: 190px; height: 34px; primary: true;
+                        text: root.server-setup-busy ? "Repairing..." : "Confirm and Retry";
+                        enabled: !root.server-setup-busy;
+                        clicked => { root.server-setup-decision(4); }
+                    }
+                }
+            }
             if root.server-setup-success-kind != 0: VerticalLayout {
                 x: 22px; y: 112px; width: parent.width - 44px;
                 spacing: 15px;
@@ -4063,7 +4107,8 @@ export component MainWindow inherits Window {
                     color: WorkbenchStyle.muted; font-size: 12px; wrap: word-wrap;
                 }
             }
-            if root.server-setup-review-open && root.server-setup-success-kind == 0: ScrollView {
+            if root.server-setup-review-open && root.server-setup-success-kind == 0
+                    && root.server-setup-reconcile-kind == 0: ScrollView {
                 x: 22px; y: 107px; width: parent.width - 44px;
                 height: max(90px, parent.height -
                     (root.server-setup-error != "" || root.server-setup-status != "" ? 266px : 183px));
@@ -4174,7 +4219,9 @@ export component MainWindow inherits Window {
             }
             // Single-choice server picker. The three options are selectable
             // rows, not action buttons; Continue opens the selected provider.
-            if root.server-setup-page == 0 && !root.server-setup-review-open && root.server-setup-success-kind == 0: VerticalLayout {
+            if root.server-setup-page == 0 && !root.server-setup-review-open
+                    && root.server-setup-success-kind == 0
+                    && root.server-setup-reconcile-kind == 0: VerticalLayout {
                 x: 22px; y: 110px; width: parent.width - 44px; spacing: 12px;
                 Rectangle {
                     width: parent.width; height: 72px; border-radius: UiRadius.control;
@@ -4305,7 +4352,9 @@ export component MainWindow inherits Window {
             }
             // Keep fields in a measured, scrollable layout. The dedicated
             // feedback area below is never laid over a form input.
-            if root.server-setup-page == 1 && !root.server-setup-review-open && root.server-setup-success-kind == 0: ScrollView {
+            if root.server-setup-page == 1 && !root.server-setup-review-open
+                    && root.server-setup-success-kind == 0
+                    && root.server-setup-reconcile-kind == 0: ScrollView {
                 x: 22px; y: root.server-setup-postconnect ? 130px : 110px; width: parent.width - 44px;
                 height: max(90px, parent.height -
                     (root.server-setup-error != "" || root.server-setup-status != "" ? 249px : 171px)
@@ -4535,7 +4584,7 @@ export component MainWindow inherits Window {
             }
             HorizontalLayout {
                 x: 22px; y: parent.height - 56px; width: parent.width - 44px; height: 34px; spacing: 10px;
-                if root.server-setup-success-kind == 0: SettingsButton {
+                if root.server-setup-success-kind == 0 && root.server-setup-reconcile-kind == 0: SettingsButton {
                     width: 84px; text: "Back";
                     enabled: root.server-setup-page > 0 && !root.server-setup-busy;
                     clicked => {
@@ -4561,6 +4610,7 @@ export component MainWindow inherits Window {
                         root.server-setup-open = false;
                         root.server-setup-review-open = false;
                         root.server-setup-retry-available = false;
+                        root.server-setup-reconcile-kind = 0;
                         root.server-setup-confirm-update = false;
                         root.server-setup-token = "";
                         root.server-setup-status = "";
@@ -4574,6 +4624,7 @@ export component MainWindow inherits Window {
                     enabled: !root.server-setup-busy
                         && (root.server-setup-success-kind != 0
                             || (!root.server-setup-review-open && !root.server-setup-switch-confirm
+                                && root.server-setup-reconcile-kind == 0
                                 && (root.server-setup-page == 0
                                     || (root.server-setup-page == 1
                                         && !(root.server-setup-provider == 1 && root.server-setup-cloudflare-method == 1)))));
