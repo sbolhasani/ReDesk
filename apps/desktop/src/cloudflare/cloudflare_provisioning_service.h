@@ -104,6 +104,11 @@ class CloudflareProvisioningService {
   static bool IsUpdateAvailable(const std::string& deployed_version);
   // Local DPAPI recovery status only; never exposes the secret to the UI.
   static bool HasPendingTurnRecovery(const std::string& account_id);
+  // Explicit, account-scoped reconciliation. No Cloudflare resource is
+  // deleted. Removes only an orphaned local encrypted TURN recovery file
+  // after independently verifying that Worker and ReDesk TURN keys are absent.
+  Result DiscardOrphanTurnRecovery(const std::string& api_token,
+                                  const std::string& account_id) const;
   Result ConfigureExisting(const SetupOptions& options,
                            std::string* signal_address) const;
   // Fresh deployment only. Existing Worker/TURN state always requires a
