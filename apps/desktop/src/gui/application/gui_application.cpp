@@ -3115,6 +3115,7 @@ void GuiApplication::Tick() {
             result.endpoint, 443) != 0) {
       window->set_server_setup_error("Could not save Cloudflare server configuration.");
     } else {
+      const std::string completed_worker_url = ui_->server_setup_review.worker_url;
       ui_->server_setup_pending_token.clear();
       ui_->server_setup_review = {};
       window->set_server_setup_token("");
@@ -3127,10 +3128,9 @@ void GuiApplication::Tick() {
       // Keep the setup window visible until the user explicitly selects Finish.
       // Do not confuse successful API deployment with post-update health:
       // those have distinct completion text in the UI.
-      std::string success_url = ui_->server_setup_review.worker_url;
-      if (success_url.empty() && !result.endpoint.empty()) {
-        success_url = "https://" + result.endpoint;
-      }
+      const std::string success_url = completed_worker_url.empty()
+          ? std::string(window->get_server_setup_host())
+          : completed_worker_url;
       window->set_server_setup_success_url(success_url.c_str());
       window->set_server_setup_success_kind(result.setup_completion_kind);
       ApplySettingsFromConfig(true);
