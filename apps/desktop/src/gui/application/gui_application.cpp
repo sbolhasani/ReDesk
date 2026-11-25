@@ -1509,6 +1509,15 @@ void GuiApplication::InitializeUi() {
           saved.value("height", int(default_gallery_size.height)), 486, 4320);
       ui_->gallery_window.wall_size =
           slint::LogicalSize(slint::Size<float>{float(width), float(height)});
+      // Older settings did not store a connection-window size. Their default
+      // remains the minimum; new settings restore the user's last size.
+      const int connection_width = std::clamp(
+          saved.value("connection_width", 640), 640, 7680);
+      const int connection_height = std::clamp(
+          saved.value("connection_height", 503), 503, 4320);
+      ui_->connection_window.connection_size =
+          slint::LogicalSize(slint::Size<float>{
+              float(connection_width), float(connection_height)});
       ui_->gallery_window.wall_fullscreen = saved.value("fullscreen", false);
       ui_->gallery_window.wall_maximized = saved.value("maximized", false);
 #if defined(__APPLE__)
@@ -6486,6 +6495,12 @@ void GuiApplication::SaveGalleryWindowState() {
     if (ui_->gallery_window.wall_size) {
       state["width"] = int(std::lround(ui_->gallery_window.wall_size->width));
       state["height"] = int(std::lround(ui_->gallery_window.wall_size->height));
+    }
+    if (ui_->connection_window.connection_size) {
+      state["connection_width"] =
+          int(std::lround(ui_->connection_window.connection_size->width));
+      state["connection_height"] =
+          int(std::lround(ui_->connection_window.connection_size->height));
     }
     if (ui_->gallery_window.wall_position) {
       state["wall_x"] = ui_->gallery_window.wall_position->x / scale;
