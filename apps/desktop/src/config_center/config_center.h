@@ -123,7 +123,7 @@ class ConfigCenter {
   SERVER_PROVIDER server_provider_ = SERVER_PROVIDER::PUBLIC;
   bool enable_autostart_ = false;
   bool enable_daemon_ = false;
-  std::atomic<bool> enable_privacy_screen_{true};
+  std::atomic<bool> enable_privacy_screen_{false};
   std::atomic<bool> privacy_local_unlock_allowed_{true};
   std::atomic<bool> lock_on_disconnect_{false};
   std::atomic<bool> trusted_devices_only_{false};
